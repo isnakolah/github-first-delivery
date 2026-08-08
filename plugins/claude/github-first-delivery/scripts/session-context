@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+command -v gfd >/dev/null 2>&1 && gfd context --json 2>/dev/null || printf '%s\n' 'gfd missing: source install required'

@@ -1,0 +1,24 @@
+schema_version: 1
+owner: isnakolah
+repository: github-first-delivery
+project:
+  id: PVT_kwHOAtDPcM4BfyqH
+  number: 9
+  title: GitHub-first Delivery
+  fields:
+    status: PVTSSF_lAHOAtDPcM4BfyqHzhaDAnE
+    kind: PVTSSF_lAHOAtDPcM4BfyqHzhaDAt4
+    area: PVTSSF_lAHOAtDPcM4BfyqHzhaDAt8
+    priority: PVTSSF_lAHOAtDPcM4BfyqHzhaDAuA
+    proof: PVTSSF_lAHOAtDPcM4BfyqHzhaDAuE
+    lease_holder: PVTF_lAHOAtDPcM4BfyqHzhaDAuI
+    lease_expires: PVTF_lAHOAtDPcM4BfyqHzhaDAuM
+    branch: PVTF_lAHOAtDPcM4BfyqHzhaDAuQ
+    state_fingerprint: PVTF_lAHOAtDPcM4BfyqHzhaDAuU
+areas: [stable]
+wiki_mode: journal
+default_branch: main
+writer_version: 0.0.0-dev
+policy:
+  lease_ttl_minutes: 120
+  reconcile_minutes: 5

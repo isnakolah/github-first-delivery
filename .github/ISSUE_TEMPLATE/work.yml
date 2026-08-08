@@ -1,0 +1,31 @@
+name: Work
+description: Story, Contract, Task, Gate, or Defect.
+title: "US- — "
+body:
+  - type: textarea
+    id: contract
+    attributes:
+      label: Work contract
+      value: |
+        <!-- work:v1 -->
+        ## Outcome
+
+        ## Scope
+        Includes:
+        -
+        Excludes:
+        -
+
+        ## Acceptance criteria
+        - [ ]
+
+        ## Required evidence
+        -
+        - Verification boundary: local | CI | target host | provider | staging | production | release
+
+        ## Documentation impact
+        None: specific reason
+
+        ## Source and relationships
+        - Native parent and blocker links are authoritative.
+    validations: {required: true}

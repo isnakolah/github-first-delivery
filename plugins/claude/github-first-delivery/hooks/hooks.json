@@ -1,0 +1,6 @@
+{
+  "hooks": {
+    "SessionStart": [{"command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-context"}],
+    "PreToolUse": [{"matcher": "Edit|Write", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/pre-write-guard"}]
+  }
+}
