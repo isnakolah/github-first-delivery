@@ -261,7 +261,11 @@ func writerCommand(args []string) error {
 		return err
 	}
 	pending, rejected := writer.Pending(comments)
+	receiptsApplied := 0
 	if *apply {
+		for _, item := range pending {
+			rejected = append(rejected, writer.AcceptanceReceipt(item.Request))
+		}
 		for _, receipt := range rejected {
 			body, err := writer.RejectionComment(receipt)
 			if err != nil {
@@ -270,11 +274,12 @@ func writerCommand(args []string) error {
 			if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, *number, body); err != nil {
 				return err
 			}
+			receiptsApplied++
 		}
 	}
 	ids := make([]string, 0, len(pending))
 	for _, item := range pending {
 		ids = append(ids, item.Request.ID)
 	}
-	return printValue(map[string]any{"issue_number": *number, "pending_request_ids": ids, "rejected": len(rejected), "rejections_applied": *apply, "note": "pending requests require lifecycle mutation support before acceptance"}, *asJSON)
+	return printValue(map[string]any{"issue_number": *number, "pending_request_ids": ids, "receipts_applied": receiptsApplied, "apply": *apply, "note": "receipt acceptance records request; lifecycle state mutation remains later Writer work"}, *asJSON)
 }

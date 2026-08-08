@@ -40,11 +40,28 @@ func Pending(comments []gh.Comment) ([]PendingRequest, []Receipt) {
 			rejected = append(rejected, Receipt{RequestID: r.ID, Result: "rejected", Detail: "request comment was edited; submit a new request", At: time.Now().UTC()})
 			continue
 		}
+		if !actorMatches(r.Actor, comment.User.Login) {
+			rejected = append(rejected, Receipt{RequestID: r.ID, Result: "rejected", Detail: "request actor does not match comment author", At: time.Now().UTC()})
+			continue
+		}
 		if !receipted[r.ID] {
 			pending = append(pending, PendingRequest{Request: r, CommentID: comment.ID})
 		}
 	}
 	return pending, rejected
+}
+
+func actorMatches(actor, login string) bool {
+	if actor == "" || login == "" {
+		return false
+	}
+	return actor == login || strings.Contains(actor, "/"+login+"/") || strings.HasSuffix(actor, "/"+login)
+}
+
+// AcceptanceReceipt records one validated request. State-changing lifecycle work is
+// intentionally delegated to the later lease/fingerprint Writer stories.
+func AcceptanceReceipt(request Request) Receipt {
+	return Receipt{RequestID: request.ID, Fingerprint: request.ExpectedFingerprint, Result: "accepted", Detail: "durable request recorded; lifecycle mutation pending Writer support", At: time.Now().UTC()}
 }
 
 func receiptRequestIDs(body string) []string {
