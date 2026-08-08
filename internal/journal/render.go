@@ -13,3 +13,14 @@ func Render(entry Entry) string {
 func HasRequest(log, requestID string) bool {
 	return strings.Contains(log, "<!-- gfd-journal:v1 request="+requestID+" -->")
 }
+
+// Append keeps generated journal idempotent. It never derives delivery state.
+func Append(log string, entry Entry) string {
+	if HasRequest(log, entry.RequestID) {
+		return log
+	}
+	if log != "" && !strings.HasSuffix(log, "\n") {
+		log += "\n"
+	}
+	return log + Render(entry)
+}

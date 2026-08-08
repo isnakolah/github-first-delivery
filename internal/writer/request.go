@@ -23,6 +23,14 @@ type Request struct {
 	Evidence            *Evidence `json:"evidence,omitempty"`
 }
 type Evidence struct{ FinalSHA, CIURL, Commands, Environments, Criteria, Artifacts, Documentation, Risks, Boundary string }
+
+func (e Evidence) Validate() error {
+	if e.FinalSHA == "" || e.CIURL == "" || e.Commands == "" || e.Environments == "" || e.Criteria == "" || e.Documentation == "" || e.Boundary == "" {
+		return fmt.Errorf("evidence requires final SHA, CI URL, commands, environments, criteria, documentation, and proof boundary")
+	}
+	return nil
+}
+
 type Receipt struct {
 	RequestID   string    `json:"request_id"`
 	Fingerprint string    `json:"fingerprint"`
