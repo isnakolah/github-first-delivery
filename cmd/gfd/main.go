@@ -51,7 +51,9 @@ func run(args []string) error {
 		return evidenceCommand(args[1:])
 	case "journal":
 		return journalCommand(args[1:])
-	case "writer", "policy", "issue", "pr", "adopt":
+	case "writer":
+		return writerCommand(args[1:])
+	case "policy", "issue", "pr", "adopt":
 		return fmt.Errorf("%s is reserved; implementation tracked through GitHub Project", args[0])
 	default:
 		return usage()
@@ -233,4 +235,51 @@ func journalCommand(args []string) error {
 	}
 	fmt.Println("journal render delegated to serialized writer")
 	return nil
+}
+
+func writerCommand(args []string) error {
+	if len(args) == 0 || args[0] != "run" {
+		return errors.New("usage: gfd writer run --issue-number N [--apply]")
+	}
+	fs := flag.NewFlagSet("writer run", flag.ContinueOnError)
+	number := fs.Int("issue-number", 0, "issue number")
+	apply := applyFlag(fs)
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if *number < 1 {
+		return errors.New("--issue-number is required")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	client := github.NewClient()
+	comments, err := client.ListComments(context.Background(), c.Owner, c.Repository, *number)
+	if err != nil {
+		return err
+	}
+	pending, rejected := writer.Pending(comments)
+	receiptsApplied := 0
+	if *apply {
+		for _, item := range pending {
+			rejected = append(rejected, writer.AcceptanceReceipt(item.Request))
+		}
+		for _, receipt := range rejected {
+			body, err := writer.RejectionComment(receipt)
+			if err != nil {
+				return err
+			}
+			if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, *number, body); err != nil {
+				return err
+			}
+			receiptsApplied++
+		}
+	}
+	ids := make([]string, 0, len(pending))
+	for _, item := range pending {
+		ids = append(ids, item.Request.ID)
+	}
+	return printValue(map[string]any{"issue_number": *number, "pending_request_ids": ids, "receipts_applied": receiptsApplied, "apply": *apply, "note": "receipt acceptance records request; lifecycle state mutation remains later Writer work"}, *asJSON)
 }
