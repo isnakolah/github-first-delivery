@@ -10,6 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trusted metadata-only policy boundary
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           test "${{ github.event.pull_request.head.repo.fork }}" != "true" || echo "Fork PR: no checkout and no writer secret."
           test -n "${{ github.event.pull_request.number }}"
+          printf '%s\n' "$HEAD_REF" | grep -Eq '^[0-9]{3}/[a-z0-9][a-z0-9-]*$'
+          refs=$(printf '%s\n' "$PR_BODY" | grep -Eo '(Fixes|Closes|Resolves|Refs) #[0-9]+' | wc -l | tr -d ' ')
+          test "$refs" = 1
