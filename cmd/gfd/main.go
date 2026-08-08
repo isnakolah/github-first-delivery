@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -51,6 +52,8 @@ func run(args []string) error {
 		return evidenceCommand(args[1:])
 	case "journal":
 		return journalCommand(args[1:])
+	case "configure":
+		return configureCommand(args[1:])
 	case "writer":
 		return writerCommand(args[1:])
 	case "policy", "issue", "pr", "adopt":
@@ -234,6 +237,33 @@ func journalCommand(args []string) error {
 		return errors.New("usage: gfd journal render")
 	}
 	fmt.Println("journal render delegated to serialized writer")
+	return nil
+}
+
+func configureCommand(args []string) error {
+	if len(args) == 0 || args[0] != "writer-token" {
+		return errors.New("usage: gfd configure writer-token --apply < token")
+	}
+	fs := flag.NewFlagSet("configure writer-token", flag.ContinueOnError)
+	apply := applyFlag(fs)
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if !*apply {
+		return errors.New("writer-token configuration requires --apply")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("gh", "secret", "set", "GFD_WRITER_TOKEN", "--repo", c.Owner+"/"+c.Repository)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("set GFD_WRITER_TOKEN: %w", err)
+	}
+	fmt.Println("GFD_WRITER_TOKEN configured; token was not read, printed, or persisted locally")
 	return nil
 }
 
