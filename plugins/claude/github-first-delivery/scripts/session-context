@@ -1,3 +1,10 @@
 #!/bin/sh
 set -eu
-command -v gfd >/dev/null 2>&1 && gfd context --json 2>/dev/null || printf '%s\n' 'gfd missing: source install required'
+if command -v gfd >/dev/null 2>&1; then
+  gfd context --json 2>/dev/null || true
+  if [ -z "${GFD_LEASE_ISSUE:-}" ] || [ -z "${GFD_LEASE_HOLDER:-}" ]; then
+    printf '%s\n' 'gfd lease context missing: edits will be denied'
+  fi
+else
+  printf '%s\n' 'gfd missing: source install required'
+fi
