@@ -17,7 +17,7 @@ gfd doctor
 
 GitHub is authority. No local `plan/`, `tasks/`, roadmap, or TODO ledger. Every live non-Epic Issue has native parent. Every implementation branch and PR maps to one leaf Issue. Project `Status` is only mutable workflow state; status labels forbidden. Writer serializes mutations. Evidence receipt, not merged PR, closes work.
 
-Read [operations guide](docs/operations.md), [architecture](docs/architecture.md), and GitHub Project before work.
+Read [operations guide](docs/operations.md), [source install and recovery](docs/source-install.md), [architecture](docs/architecture.md), and GitHub Project before work.
 
 ## Development
 
