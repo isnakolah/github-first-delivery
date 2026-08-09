@@ -1,6 +1,8 @@
 # Operations
 
-Use dedicated fine-grained `GFD_WRITER_TOKEN` only in Actions secret. Scope it to target repository contents, Issues, Pull requests, Actions, and owning user Projects. Never place token in config, cache, log, request, or shell history. Rotate, revoke, and verify it through `gfd doctor` before Writer enablement.
+Store `GFD_WRITER_TOKEN` only as an Actions secret. For a personal Project V2, GitHub currently requires a dedicated classic PAT with `public_repo` and `project`; fine-grained PATs cannot mutate that Project. Classic PATs cannot be restricted to one public repository, so use a dedicated token with a short expiry, rotate and revoke it promptly, and never place it in config, cache, logs, request comments, or shell history. `gfd configure writer-token --apply` reads it from standard input without printing or persisting it locally.
+
+For local commands, `gfd` uses `GITHUB_TOKEN` when supplied; otherwise it reads the active `gh auth token` credential in memory for that invocation. It never writes either credential to repository config or cache.
 
 All changing commands require `--apply`; bootstrap requires `--yes`. `gfd context` is first command for agents. Claim leaf work before branch/edit. Submit evidence with final SHA, PR/CI URLs, commands, environments, acceptance result, artifacts, documentation, risks, and proof boundary. A merged PR alone is not Done.
 

@@ -7,7 +7,8 @@
 - macOS or Linux host;
 - Go 1.26.4;
 - GitHub CLI authenticated to target owner/repository;
-- a dedicated fine-grained Writer token only when activating Writer in Actions.
+- an active `gh auth login` credential for local commands;
+- a dedicated short-lived classic PAT with `public_repo` and `project` only when activating a personal Project V2 Writer in Actions. This PAT covers public repositories account-wide; fine-grained PATs cannot mutate personal Project V2 fields.
 
 ## Install
 
@@ -20,7 +21,7 @@ gfd doctor --json
 gfd context --json
 ```
 
-`gfd doctor` reports local config/token visibility only. It does not prove Writer authority, hook trust, target-host behavior, or provider state.
+`gfd doctor` reports local config and whether `GITHUB_TOKEN` or active `gh` authentication is available. It does not prove Writer authority, hook trust, target-host behavior, or provider state.
 
 ## Plugin source install
 
