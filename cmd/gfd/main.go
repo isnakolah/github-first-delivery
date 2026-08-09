@@ -71,6 +71,9 @@ func issueCommand(args []string) error {
 	if len(args) > 0 && args[0] == "link-parent" {
 		return linkParentCommand(args[1:])
 	}
+	if len(args) > 0 && args[0] == "add-blocker" {
+		return addBlockerCommand(args[1:])
+	}
 	if len(args) == 0 || args[0] != "create" {
 		return errors.New("usage: gfd issue {create|link-parent}")
 	}
@@ -104,6 +107,53 @@ func issueCommand(args []string) error {
 		return err
 	}
 	cmd := exec.Command("gh", "issue", "create", "--repo", c.Owner+"/"+c.Repository, "--title", *title, "--label", "kind:"+*kind, "--body-file", *bodyFile)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+func addBlockerCommand(args []string) error {
+	fs := flag.NewFlagSet("issue add-blocker", flag.ContinueOnError)
+	issue := fs.Int("issue", 0, "blocked Issue number")
+	blocker := fs.Int("blocker", 0, "blocking Issue number")
+	apply := applyFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*apply {
+		return errors.New("blocker link requires --apply")
+	}
+	if *issue < 1 || *blocker < 1 || *issue == *blocker {
+		return errors.New("distinct --issue and --blocker are required")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	query := fmt.Sprintf("query { repository(owner:\"%s\",name:\"%s\") { i:issue(number:%d){id} b:issue(number:%d){id} } }", c.Owner, c.Repository, *issue, *blocker)
+	output, err := exec.Command("gh", "api", "graphql", "-f", "query="+query).Output()
+	if err != nil {
+		return err
+	}
+	var response struct {
+		Data struct {
+			Repository struct {
+				I struct {
+					ID string `json:"id"`
+				} `json:"i"`
+				B struct {
+					ID string `json:"id"`
+				} `json:"b"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		return err
+	}
+	if response.Data.Repository.I.ID == "" || response.Data.Repository.B.ID == "" {
+		return errors.New("Issue or blocker not found")
+	}
+	mutation := fmt.Sprintf("mutation { addBlockedBy(input:{issueId:\"%s\",blockingIssueId:\"%s\"}) { issue { number } } }", response.Data.Repository.I.ID, response.Data.Repository.B.ID)
+	cmd := exec.Command("gh", "api", "graphql", "-f", "query="+mutation)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
