@@ -433,14 +433,15 @@ type createdProject struct {
 
 func provisionGitHub(owner, repo, visibility, projectName string) (createdProject, error) {
 	remote := owner + "/" + repo
-	if err := exec.Command("gh", "repo", "view", remote).Run(); err != nil {
-		flag := "--public"
-		if visibility == "private" {
-			flag = "--private"
-		}
-		if output, createErr := exec.Command("gh", "repo", "create", remote, flag).CombinedOutput(); createErr != nil {
-			return createdProject{}, fmt.Errorf("create repository %s: %s", remote, strings.TrimSpace(string(output)))
-		}
+	if err := exec.Command("gh", "repo", "view", remote).Run(); err == nil {
+		return createdProject{}, fmt.Errorf("repository %s already exists; use gfd adopt after its audit", remote)
+	}
+	flag := "--public"
+	if visibility == "private" {
+		flag = "--private"
+	}
+	if output, err := exec.Command("gh", "repo", "create", remote, flag).CombinedOutput(); err != nil {
+		return createdProject{}, fmt.Errorf("create repository %s: %s", remote, strings.TrimSpace(string(output)))
 	}
 	if output, err := exec.Command("gh", "repo", "edit", remote, "--enable-issues", "--enable-wiki").CombinedOutput(); err != nil {
 		return createdProject{}, fmt.Errorf("enable repository features: %s", strings.TrimSpace(string(output)))
