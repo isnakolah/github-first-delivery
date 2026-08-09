@@ -1072,6 +1072,7 @@ type readyWork struct {
 
 type workCandidate struct {
 	readyWork
+	Body          string
 	ParentID      string
 	HasChildren   bool
 	Status        string
@@ -1091,7 +1092,7 @@ func workListCommand(args []string) error {
 		return err
 	}
 	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issues(first:100,states:OPEN) { nodes {
-id number title parent { id } subIssues(first:1) { nodes { id } } blockedBy(first:100) { nodes { state } }
+id number title body parent { id } subIssues(first:1) { nodes { id } } blockedBy(first:100) { nodes { state } }
 projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
@@ -1109,6 +1110,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 						ID     string `json:"id"`
 						Number int    `json:"number"`
 						Title  string `json:"title"`
+						Body   string `json:"body"`
 						Parent *struct {
 							ID string `json:"id"`
 						} `json:"parent"`
@@ -1148,7 +1150,7 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 	}
 	candidates := make([]workCandidate, 0, len(response.Data.Repository.Issues.Nodes))
 	for _, issue := range response.Data.Repository.Issues.Nodes {
-		candidate := workCandidate{readyWork: readyWork{IssueID: issue.ID, Number: issue.Number, Title: issue.Title}, HasChildren: len(issue.SubIssues.Nodes) != 0}
+		candidate := workCandidate{readyWork: readyWork{IssueID: issue.ID, Number: issue.Number, Title: issue.Title}, Body: issue.Body, HasChildren: len(issue.SubIssues.Nodes) != 0}
 		if issue.Parent != nil {
 			candidate.ParentID = issue.Parent.ID
 		}
@@ -1191,7 +1193,10 @@ projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 func selectReadyWork(candidates []workCandidate, now time.Time) []readyWork {
 	ready := make([]readyWork, 0, len(candidates))
 	for _, candidate := range candidates {
-		if candidate.Status != "Ready" || candidate.ParentID == "" || candidate.HasChildren {
+		if candidate.Status != "Ready" || candidate.ParentID == "" || candidate.HasChildren || strings.EqualFold(candidate.Kind, "Epic") {
+			continue
+		}
+		if err := model.ValidateWorkContract(candidate.Body); err != nil {
 			continue
 		}
 		blocked := false

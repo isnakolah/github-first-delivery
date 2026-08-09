@@ -134,6 +134,18 @@ func TestIssueNumberFromURL(t *testing.T) {
 	}
 }
 
+func TestSelectReadyWorkRequiresValidContract(t *testing.T) {
+	valid := model.WorkBody("test", "scope", "none", "pass", "test", "None: test", "source", "local")
+	candidates := []workCandidate{
+		{readyWork: readyWork{IssueID: "bad", Number: 1, Kind: "Story"}, Status: "Ready", ParentID: "parent", Body: "missing contract"},
+		{readyWork: readyWork{IssueID: "good", Number: 2, Kind: "Story"}, Status: "Ready", ParentID: "parent", Body: valid},
+	}
+	ready := selectReadyWork(candidates, time.Now())
+	if len(ready) != 1 || ready[0].Number != 2 {
+		t.Fatalf("ready=%+v", ready)
+	}
+}
+
 func TestContainsAndTitleCase(t *testing.T) {
 	if !contains([]string{"delivery", "core"}, "core") || contains([]string{"delivery"}, "ops") {
 		t.Fatal("configured area lookup is incorrect")
@@ -164,12 +176,13 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 
 func TestSelectReadyWorkExcludesNonLeafBlockedAndLeased(t *testing.T) {
 	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	contract := model.WorkBody("test", "scope", "none", "pass", "test", "None: test", "source", "local")
 	ready := selectReadyWork([]workCandidate{
-		{readyWork: readyWork{IssueID: "I-1", Number: 1}, ParentID: "P", Status: "Ready"},
-		{readyWork: readyWork{IssueID: "I-2", Number: 2}, ParentID: "P", Status: "Ready", HasChildren: true},
-		{readyWork: readyWork{IssueID: "I-3", Number: 3}, ParentID: "P", Status: "Ready", BlockerStates: []string{"OPEN"}},
-		{readyWork: readyWork{IssueID: "I-4", Number: 4}, ParentID: "P", Status: "Ready", LeaseHolder: "agent", LeaseExpires: now.Add(time.Hour).Format(time.RFC3339)},
-		{readyWork: readyWork{IssueID: "I-5", Number: 5}, ParentID: "P", Status: "Ready", LeaseHolder: "agent", LeaseExpires: now.Add(-time.Hour).Format(time.RFC3339)},
+		{readyWork: readyWork{IssueID: "I-1", Number: 1, Kind: "Story"}, ParentID: "P", Status: "Ready", Body: contract},
+		{readyWork: readyWork{IssueID: "I-2", Number: 2, Kind: "Story"}, ParentID: "P", Status: "Ready", Body: contract, HasChildren: true},
+		{readyWork: readyWork{IssueID: "I-3", Number: 3, Kind: "Story"}, ParentID: "P", Status: "Ready", Body: contract, BlockerStates: []string{"OPEN"}},
+		{readyWork: readyWork{IssueID: "I-4", Number: 4, Kind: "Story"}, ParentID: "P", Status: "Ready", Body: contract, LeaseHolder: "agent", LeaseExpires: now.Add(time.Hour).Format(time.RFC3339)},
+		{readyWork: readyWork{IssueID: "I-5", Number: 5, Kind: "Story"}, ParentID: "P", Status: "Ready", Body: contract, LeaseHolder: "agent", LeaseExpires: now.Add(-time.Hour).Format(time.RFC3339)},
 	}, now)
 	if len(ready) != 2 || ready[0].Number != 1 || ready[1].Number != 5 {
 		t.Fatalf("ready work = %#v", ready)
