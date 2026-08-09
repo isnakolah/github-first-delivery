@@ -2,15 +2,14 @@ package main
 
 import (
 	"bytes"
+	"github.com/isnakolah/github-first-delivery/internal/github"
+	"github.com/isnakolah/github-first-delivery/internal/writer"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/isnakolah/github-first-delivery/internal/github"
-	"github.com/isnakolah/github-first-delivery/internal/writer"
 )
 
 func TestLiveWorkFingerprintIgnoresRequestCommentTimestamp(t *testing.T) {
@@ -161,4 +160,18 @@ func captureStdout(t *testing.T, fn func() error) (string, error) {
 	}
 	_ = reader.Close()
 	return output.String(), err
+}
+
+func TestSelectReadyWorkExcludesNonLeafBlockedAndLeased(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	ready := selectReadyWork([]workCandidate{
+		{readyWork: readyWork{IssueID: "I-1", Number: 1}, ParentID: "P", Status: "Ready"},
+		{readyWork: readyWork{IssueID: "I-2", Number: 2}, ParentID: "P", Status: "Ready", HasChildren: true},
+		{readyWork: readyWork{IssueID: "I-3", Number: 3}, ParentID: "P", Status: "Ready", BlockerStates: []string{"OPEN"}},
+		{readyWork: readyWork{IssueID: "I-4", Number: 4}, ParentID: "P", Status: "Ready", LeaseHolder: "agent", LeaseExpires: now.Add(time.Hour).Format(time.RFC3339)},
+		{readyWork: readyWork{IssueID: "I-5", Number: 5}, ParentID: "P", Status: "Ready", LeaseHolder: "agent", LeaseExpires: now.Add(-time.Hour).Format(time.RFC3339)},
+	}, now)
+	if len(ready) != 2 || ready[0].Number != 1 || ready[1].Number != 5 {
+		t.Fatalf("ready work = %#v", ready)
+	}
 }
