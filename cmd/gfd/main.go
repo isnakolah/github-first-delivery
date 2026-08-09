@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/isnakolah/github-first-delivery/internal/bootstrap"
 	"github.com/isnakolah/github-first-delivery/internal/github"
 	"github.com/isnakolah/github-first-delivery/internal/model"
 	"github.com/isnakolah/github-first-delivery/internal/writer"
@@ -309,6 +310,9 @@ func initCommand(args []string) error {
 	c.Project.ID = projectInfo.ID
 	c.Project.Number = projectInfo.Number
 	c.Project.Fields = fieldIDs
+	if err := bootstrap.Install(".", *owner, projectInfo.Number); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return err
 	}

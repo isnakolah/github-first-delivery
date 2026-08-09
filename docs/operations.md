@@ -6,6 +6,8 @@ All changing commands require `--apply`; bootstrap requires `--yes`. `gfd contex
 
 `gfd init` creates Kind, Area, Priority, Proof, lease, branch, and fingerprint fields; replaces Project Status options with canonical lifecycle values; creates configured `area:*` labels; and persists resolved field IDs in `.github/gfd/config.yaml`. It is safe only for fresh bootstrap repositories.
 
+It also installs source-controlled Epic, Work, Decision, and routed Issue forms plus the compact GitHub-first agent rule. Bootstrap refuses to overwrite any installed operating file.
+
 `gfd validate --json` reads live GitHub Issues and Project fields. It reports every detected live-work violation: missing parent/contract/Project Status/Kind/Area, parent or blocker cycle, unresolved blocker in Ready/Claimed/In progress/Done, Epic branch ownership, field-label mismatch, and a Done parent with unfinished child. Closed historical Issues remain relationship context but do not require current Project classification.
 
 Use `gfd context --issue-number N --json` to obtain Issue node ID and current state fingerprint. The Writer rejects a changed fingerprint. Claims also require `--branch NNN/short-description`; leases use a two-hour maximum. On an Issue-comment event, active Writer runs fingerprint verification, lifecycle validation, Project field update, then receipt emission. It never activates without `GFD_WRITER_TOKEN`.
