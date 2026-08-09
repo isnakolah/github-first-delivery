@@ -140,7 +140,7 @@ func addBlockerCommand(args []string) error {
 		return err
 	}
 	query := fmt.Sprintf("query { repository(owner:\"%s\",name:\"%s\") { i:issue(number:%d){id} b:issue(number:%d){id} } }", c.Owner, c.Repository, *issue, *blocker)
-	output, err := exec.Command("gh", "api", "graphql", "-f", "query="+query).Output()
+	output, err := ghOutput("api", "graphql", "-f", "query="+query)
 	if err != nil {
 		return err
 	}
@@ -822,7 +822,7 @@ func writerReconcileCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	output, err := exec.Command("gh", "issue", "list", "--repo", c.Owner+"/"+c.Repository, "--state", "open", "--limit", "100", "--json", "number").Output()
+	output, err := ghOutput("issue", "list", "--repo", c.Owner+"/"+c.Repository, "--state", "open", "--limit", "100", "--json", "number")
 	if err != nil {
 		return err
 	}
@@ -1046,7 +1046,7 @@ projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
 } } } }
 } } }`, c.Owner, c.Repository, number)
-	output, err := exec.Command("gh", "api", "graphql", "-f", "query="+query).Output()
+	output, err := ghOutput("api", "graphql", "-f", "query="+query)
 	if err != nil {
 		return liveWork{}, err
 	}
@@ -1182,7 +1182,7 @@ func updateLiveWork(c model.Config, itemID string, state writer.WorkState) error
 // initializeProjectFields fills only blank bootstrap fields. Existing values are
 // never overwritten; labels remain source for Kind and Area classification.
 func initializeProjectFields(c model.Config, number int, state liveWork) error {
-	output, err := exec.Command("gh", "issue", "view", fmt.Sprint(number), "--repo", c.Owner+"/"+c.Repository, "--json", "labels").Output()
+	output, err := ghOutput("issue", "view", fmt.Sprint(number), "--repo", c.Owner+"/"+c.Repository, "--json", "labels")
 	if err != nil {
 		return err
 	}
@@ -1258,7 +1258,7 @@ func leaseText(expiry time.Time) string {
 }
 
 func configuredProjectFields(c model.Config) (map[string]projectField, error) {
-	output, err := exec.Command("gh", "project", "field-list", fmt.Sprint(c.Project.Number), "--owner", c.Owner, "--format", "json").Output()
+	output, err := ghOutput("project", "field-list", fmt.Sprint(c.Project.Number), "--owner", c.Owner, "--format", "json")
 	if err != nil {
 		return nil, err
 	}
@@ -1284,4 +1284,14 @@ func configuredProjectFields(c model.Config) (map[string]projectField, error) {
 		fields[raw.Name] = field
 	}
 	return fields, nil
+}
+
+// ghOutput preserves GitHub CLI diagnostics. Writer reconciliation must expose
+// an authorization or schema failure rather than only returning exit status 1.
+func ghOutput(args ...string) ([]byte, error) {
+	output, err := exec.Command("gh", args...).CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("gh %s: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
+	}
+	return output, nil
 }
