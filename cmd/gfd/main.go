@@ -426,11 +426,71 @@ func contextCommand(args []string) error {
 	return printValue(c, *asJSON)
 }
 func validateCommand(args []string) error {
-	_, err := loadConfig()
+	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	c, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	fmt.Println("valid: repository configuration")
+	query := fmt.Sprintf("query { repository(owner:\"%s\",name:\"%s\") { issues(first:100,states:[OPEN]) { nodes { id number body parent { id } labels(first:20) { nodes { name } } } } } }", c.Owner, c.Repository)
+	output, err := exec.Command("gh", "api", "graphql", "-f", "query="+query).Output()
+	if err != nil {
+		return err
+	}
+	var response struct {
+		Data struct {
+			Repository struct {
+				Issues struct {
+					Nodes []struct {
+						ID     string `json:"id"`
+						Number int    `json:"number"`
+						Body   string `json:"body"`
+						Parent *struct {
+							ID string `json:"id"`
+						} `json:"parent"`
+						Labels struct {
+							Nodes []struct {
+								Name string `json:"name"`
+							} `json:"nodes"`
+						} `json:"labels"`
+					} `json:"nodes"`
+				} `json:"issues"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		return err
+	}
+	issues := make([]model.Issue, 0, len(response.Data.Repository.Issues.Nodes))
+	for _, node := range response.Data.Repository.Issues.Nodes {
+		kind := ""
+		for _, label := range node.Labels.Nodes {
+			if strings.HasPrefix(label.Name, "kind:") {
+				kind = strings.TrimPrefix(label.Name, "kind:")
+				kind = strings.ToUpper(kind[:1]) + kind[1:]
+			}
+		}
+		parent := ""
+		if node.Parent != nil {
+			parent = node.Parent.ID
+		}
+		issues = append(issues, model.Issue{ID: node.ID, Number: node.Number, Kind: kind, ParentID: parent, Body: node.Body})
+	}
+	err = model.ValidateGraph(issues)
+	report := map[string]any{"repository": c.Owner + "/" + c.Repository, "open_issues": len(issues), "valid": err == nil}
+	if *asJSON {
+		if err != nil {
+			report["error"] = err.Error()
+		}
+		return printValue(report, true)
+	}
+	if err != nil {
+		return err
+	}
+	fmt.Printf("valid: %d open Issues\n", len(issues))
 	return nil
 }
 
