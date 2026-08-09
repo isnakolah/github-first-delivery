@@ -796,7 +796,11 @@ func doctor(args []string) error {
 		return err
 	}
 	c, err := loadConfig()
-	report := map[string]any{"gfd_version": version, "config": err == nil, "github_token": github.NewClient().Token != "", "repository": ""}
+	cachePath := ""
+	if cache, cacheErr := github.NewMetadataCache(); cacheErr == nil {
+		cachePath = cache.Root
+	}
+	report := map[string]any{"gfd_version": version, "config": err == nil, "github_token": github.NewClient().Token != "", "repository": "", "cache_path": cachePath, "cache_authority": "disposable metadata only; live GitHub wins"}
 	if err == nil {
 		report["repository"] = c.Owner + "/" + c.Repository
 	}
@@ -822,9 +826,19 @@ func contextCommand(args []string) error {
 		if err != nil {
 			return err
 		}
-		return printValue(map[string]any{"config": c, "issue_number": *number, "issue_id": state.IssueID, "status": state.Status, "lease_holder": state.Holder, "lease_expires": state.Expiry, "branch": state.Branch, "state_fingerprint": fingerprint}, *asJSON)
+		report := map[string]any{"config": c, "issue_number": *number, "issue_id": state.IssueID, "status": state.Status, "lease_holder": state.Holder, "lease_expires": state.Expiry, "branch": state.Branch, "state_fingerprint": fingerprint}
+		storeMetadata("issues/"+strconv.Itoa(*number), report)
+		return printValue(report, *asJSON)
 	}
+	storeMetadata("repository/config", c)
 	return printValue(c, *asJSON)
+}
+
+func storeMetadata(key string, value any) {
+	cache, err := github.NewMetadataCache()
+	if err == nil {
+		_ = cache.StoreJSON(key, value)
+	}
 }
 func validateCommand(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
