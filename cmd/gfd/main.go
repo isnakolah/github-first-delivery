@@ -60,11 +60,20 @@ func run(args []string) error {
 		return adoptCommand(args[1:])
 	case "issue":
 		return issueCommand(args[1:])
-	case "policy", "pr":
-		return fmt.Errorf("%s is reserved; implementation tracked through GitHub Project", args[0])
+	case "pr":
+		return prCommand(args[1:])
+	case "policy":
+		return fmt.Errorf("policy is reserved; implementation tracked through GitHub Project")
 	default:
 		return usage()
 	}
+}
+
+func prCommand(args []string) error {
+	if len(args) == 0 || args[0] != "link" {
+		return errors.New("usage: gfd pr link --issue-number N --issue-id ID --fingerprint SHA --pr URL --apply")
+	}
+	return submitRequest("pr.link", args[1:], nil)
 }
 
 func issueCommand(args []string) error {
@@ -847,6 +856,16 @@ func applyWriterRequest(c model.Config, number int, request writer.Request) writ
 			}
 		}
 	}
+	if request.Action == "pr.link" {
+		if err := validateReviewPR(request.PR); err != nil {
+			return rejectedReceipt(request, err)
+		}
+	}
+	if request.Action == "evidence.submit" {
+		if err := validateMergedEvidencePR(request.PR, request.Evidence.FinalSHA); err != nil {
+			return rejectedReceipt(request, err)
+		}
+	}
 	current := writer.WorkState{Status: state.Status, Lease: writer.Lease{Holder: state.Holder, Branch: state.Branch}}
 	if state.Expiry != "" {
 		current.Lease.Expires, _ = time.Parse(time.RFC3339, state.Expiry)
@@ -864,6 +883,54 @@ func applyWriterRequest(c model.Config, number int, request writer.Request) writ
 		receipt.Evidence = request.Evidence
 	}
 	return receipt
+}
+
+func validateReviewPR(pr string) error {
+	if pr == "" {
+		return errors.New("PR link requires pull request URL")
+	}
+	output, err := exec.Command("gh", "pr", "view", pr, "--json", "state,url").Output()
+	if err != nil {
+		return fmt.Errorf("read pull request: %w", err)
+	}
+	var result struct {
+		State string `json:"state"`
+		URL   string `json:"url"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return err
+	}
+	if result.URL != pr || result.State != "OPEN" {
+		return errors.New("PR link requires an open canonical pull request URL")
+	}
+	return nil
+}
+
+func validateMergedEvidencePR(pr, finalSHA string) error {
+	if pr == "" || finalSHA == "" {
+		return errors.New("evidence requires PR URL and final SHA")
+	}
+	output, err := exec.Command("gh", "pr", "view", pr, "--json", "state,url,mergeCommit").Output()
+	if err != nil {
+		return fmt.Errorf("read pull request: %w", err)
+	}
+	var result struct {
+		State       string `json:"state"`
+		URL         string `json:"url"`
+		MergeCommit struct {
+			OID string `json:"oid"`
+		} `json:"mergeCommit"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return err
+	}
+	if result.URL != pr || result.State != "MERGED" {
+		return errors.New("evidence requires merged canonical pull request URL")
+	}
+	if result.MergeCommit.OID != finalSHA {
+		return fmt.Errorf("evidence final SHA %s does not match merged PR head %s", finalSHA, result.MergeCommit.OID)
+	}
+	return nil
 }
 
 func fingerprintLiveWork(state liveWork) (string, error) {
