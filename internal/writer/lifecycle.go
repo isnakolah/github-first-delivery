@@ -108,3 +108,12 @@ func requestExpiry(value string, now time.Time) (time.Time, error) {
 	}
 	return expires.UTC(), nil
 }
+
+// ReclaimExpired clears an expired active lease while preserving its branch for
+// deliberate takeover. It never changes non-active lifecycle states.
+func ReclaimExpired(current WorkState, now time.Time) (WorkState, bool) {
+	if (current.Status != "Claimed" && current.Status != "In progress") || current.Lease.Expires.IsZero() || current.Lease.Expires.After(now.UTC()) {
+		return current, false
+	}
+	return WorkState{Status: "Ready", Lease: Lease{Branch: current.Lease.Branch}}, true
+}

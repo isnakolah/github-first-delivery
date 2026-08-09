@@ -31,5 +31,5 @@ jobs:
           if [ "${{ github.event_name }}" = "issue_comment" ]; then
             go run ./cmd/gfd writer run --issue-number "${{ github.event.issue.number }}" --apply
           else
-            go run ./cmd/gfd doctor --json
+            go run ./cmd/gfd writer reconcile --apply
           fi

@@ -8,4 +8,6 @@ All changing commands require `--apply`; bootstrap requires `--yes`. `gfd contex
 
 Use `gfd context --issue-number N --json` to obtain Issue node ID and current state fingerprint. The Writer rejects a changed fingerprint. Claims also require `--branch NNN/short-description`; leases use a two-hour maximum. On an Issue-comment event, active Writer runs fingerprint verification, lifecycle validation, Project field update, then receipt emission. It never activates without `GFD_WRITER_TOKEN`.
 
+`gfd writer reconcile --apply` scans every open Issue, replays unreceipted requests, and returns expired Claimed/In progress leases to Ready while retaining branch context. Scheduled Writer runs invoke it every five minutes. Reconciliation writes an expiry receipt only once.
+
 Wiki journal is generated from receipts and is noncanonical. If Wiki write fails, Writer leaves work at Evidence pending and reconciliation retries.
