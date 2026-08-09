@@ -14,6 +14,7 @@ import (
 
 	"github.com/isnakolah/github-first-delivery/internal/bootstrap"
 	"github.com/isnakolah/github-first-delivery/internal/github"
+	"github.com/isnakolah/github-first-delivery/internal/journal"
 	"github.com/isnakolah/github-first-delivery/internal/model"
 	"github.com/isnakolah/github-first-delivery/internal/writer"
 	"gopkg.in/yaml.v3"
@@ -724,9 +725,29 @@ func submitRequest(action string, args []string, evidence *writer.Evidence) erro
 }
 func journalCommand(args []string) error {
 	if len(args) == 0 || args[0] != "render" {
-		return errors.New("usage: gfd journal render")
+		return errors.New("usage: gfd journal render --request-id ID --date YYYY-MM-DD --issue '#N' --pr URL --outcome TEXT --proof TEXT --boundary TEXT --next-blocker TEXT")
 	}
-	fmt.Println("journal render delegated to serialized writer")
+	fs := flag.NewFlagSet("journal render", flag.ContinueOnError)
+	requestID := fs.String("request-id", "", "Writer request ID")
+	date := fs.String("date", "", "UTC date, YYYY-MM-DD")
+	issue := fs.String("issue", "", "Issue reference")
+	pr := fs.String("pr", "", "pull request URL or None")
+	outcome := fs.String("outcome", "", "outcome summary")
+	proof := fs.String("proof", "", "proof summary")
+	boundary := fs.String("boundary", "", "proof boundary")
+	nextBlocker := fs.String("next-blocker", "", "next blocker or None")
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if *requestID == "" || *date == "" || *issue == "" || *outcome == "" || *proof == "" || *boundary == "" || *nextBlocker == "" {
+		return errors.New("journal render requires request-id, date, issue, outcome, proof, boundary, and next-blocker")
+	}
+	entry := journal.Entry{RequestID: *requestID, Date: *date, Issue: *issue, PR: *pr, Outcome: *outcome, Proof: *proof, Boundary: *boundary, NextBlocker: *nextBlocker}
+	if *asJSON {
+		return printValue(map[string]any{"entry": entry, "markdown": journal.Render(entry)}, true)
+	}
+	fmt.Print(journal.Render(entry))
 	return nil
 }
 
