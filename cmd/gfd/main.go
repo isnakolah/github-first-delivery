@@ -416,12 +416,24 @@ func doctor(args []string) error {
 func contextCommand(args []string) error {
 	fs := flag.NewFlagSet("context", flag.ContinueOnError)
 	asJSON := jsonFlag(fs)
+	number := fs.Int("issue-number", 0, "Issue number for live state fingerprint")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	c, err := loadConfig()
 	if err != nil {
 		return err
+	}
+	if *number > 0 {
+		state, err := loadLiveWork(c, *number)
+		if err != nil {
+			return err
+		}
+		fingerprint, err := fingerprintLiveWork(state)
+		if err != nil {
+			return err
+		}
+		return printValue(map[string]any{"config": c, "issue_number": *number, "issue_id": state.IssueID, "status": state.Status, "lease_holder": state.Holder, "lease_expires": state.Expiry, "branch": state.Branch, "state_fingerprint": fingerprint}, *asJSON)
 	}
 	return printValue(c, *asJSON)
 }
@@ -576,6 +588,8 @@ func submitRequest(action string, args []string, evidence *writer.Evidence) erro
 	fingerprint := fs.String("fingerprint", "", "observed fingerprint")
 	apply := applyFlag(fs)
 	lease := fs.String("lease-expires", "", "RFC3339 expiry")
+	branch := fs.String("branch", "", "NNN/short-description branch")
+	status := fs.String("status", "", "requested Project Status")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -589,7 +603,7 @@ func submitRequest(action string, args []string, evidence *writer.Evidence) erro
 	if err != nil {
 		return err
 	}
-	r := writer.Request{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Action: action, IssueID: *id, Actor: *actor, ExpectedFingerprint: *fingerprint, LeaseExpiresAt: *lease, Evidence: evidence}
+	r := writer.Request{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Action: action, IssueID: *id, Actor: *actor, ExpectedFingerprint: *fingerprint, LeaseExpiresAt: *lease, Branch: *branch, Status: *status, Evidence: evidence}
 	body, err := writer.RenderRequest(r)
 	if err != nil {
 		return err
@@ -663,7 +677,8 @@ func writerCommand(args []string) error {
 	receiptsApplied := 0
 	if *apply {
 		for _, item := range pending {
-			rejected = append(rejected, writer.AcceptanceReceipt(item.Request))
+			receipt := applyWriterRequest(c, *number, item.Request)
+			rejected = append(rejected, receipt)
 		}
 		for _, receipt := range rejected {
 			body, err := writer.RejectionComment(receipt)
@@ -680,5 +695,238 @@ func writerCommand(args []string) error {
 	for _, item := range pending {
 		ids = append(ids, item.Request.ID)
 	}
-	return printValue(map[string]any{"issue_number": *number, "pending_request_ids": ids, "receipts_applied": receiptsApplied, "apply": *apply, "note": "receipt acceptance records request; lifecycle state mutation remains later Writer work"}, *asJSON)
+	return printValue(map[string]any{"issue_number": *number, "pending_request_ids": ids, "receipts_applied": receiptsApplied, "apply": *apply, "note": "lifecycle requests require fresh fingerprint and configured Project membership"}, *asJSON)
+}
+
+type liveWork struct {
+	IssueID    string
+	IssueState string
+	UpdatedAt  string
+	ParentID   string
+	Blockers   []liveBlocker
+	ItemID     string
+	Status     string
+	Holder     string
+	Expiry     string
+	Branch     string
+}
+
+type liveBlocker struct{ ID, State string }
+
+func applyWriterRequest(c model.Config, number int, request writer.Request) writer.Receipt {
+	state, err := loadLiveWork(c, number)
+	if err != nil {
+		return rejectedReceipt(request, err)
+	}
+	if state.IssueID != request.IssueID {
+		return rejectedReceipt(request, errors.New("request Issue ID does not match target Issue"))
+	}
+	actual, err := writer.RequireFreshFingerprint(request.ExpectedFingerprint, liveWorkFingerprint(state))
+	if err != nil {
+		return writer.Receipt{RequestID: request.ID, Fingerprint: actual, Result: "rejected", Detail: err.Error(), At: time.Now().UTC()}
+	}
+	if request.Action == "claim" {
+		for _, blocker := range state.Blockers {
+			if blocker.State != "CLOSED" {
+				return rejectedReceipt(request, fmt.Errorf("unresolved blocker %s prevents claim", blocker.ID))
+			}
+		}
+	}
+	current := writer.WorkState{Status: state.Status, Lease: writer.Lease{Holder: state.Holder, Branch: state.Branch}}
+	if state.Expiry != "" {
+		current.Lease.Expires, _ = time.Parse(time.RFC3339, state.Expiry)
+	}
+	next, err := writer.ApplyLifecycle(current, request, time.Now())
+	if err != nil {
+		return rejectedReceipt(request, err)
+	}
+	if err := updateLiveWork(c, state.ItemID, next); err != nil {
+		return rejectedReceipt(request, err)
+	}
+	return writer.Receipt{RequestID: request.ID, Fingerprint: actual, Result: "accepted", Detail: "lifecycle state changed to " + next.Status, At: time.Now().UTC()}
+}
+
+func fingerprintLiveWork(state liveWork) (string, error) {
+	return writer.StateFingerprint(liveWorkFingerprint(state))
+}
+
+func liveWorkFingerprint(state liveWork) writer.Fingerprint {
+	fingerprint := writer.Fingerprint{IssueID: state.IssueID, IssueState: state.IssueState, UpdatedAt: state.UpdatedAt, ParentID: state.ParentID, Project: map[string]string{"status": state.Status, "lease_holder": state.Holder, "lease_expires": state.Expiry, "branch": state.Branch}}
+	for _, blocker := range state.Blockers {
+		fingerprint.DependencyIDs = append(fingerprint.DependencyIDs, blocker.ID)
+	}
+	return fingerprint
+}
+
+func rejectedReceipt(request writer.Request, err error) writer.Receipt {
+	return writer.Receipt{RequestID: request.ID, Fingerprint: request.ExpectedFingerprint, Result: "rejected", Detail: err.Error(), At: time.Now().UTC()}
+}
+
+func loadLiveWork(c model.Config, number int) (liveWork, error) {
+	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issue(number:%d) {
+id state updatedAt parent { id } blockedBy(first:100) { nodes { id state } }
+projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes {
+... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
+... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
+} } } }
+} } }`, c.Owner, c.Repository, number)
+	output, err := exec.Command("gh", "api", "graphql", "-f", "query="+query).Output()
+	if err != nil {
+		return liveWork{}, err
+	}
+	var response struct {
+		Data struct {
+			Repository struct {
+				Issue struct {
+					ID        string `json:"id"`
+					State     string `json:"state"`
+					UpdatedAt string `json:"updatedAt"`
+					Parent    *struct {
+						ID string `json:"id"`
+					} `json:"parent"`
+					BlockedBy struct {
+						Nodes []struct {
+							ID    string `json:"id"`
+							State string `json:"state"`
+						} `json:"nodes"`
+					} `json:"blockedBy"`
+					ProjectItems struct {
+						Nodes []struct {
+							ID      string `json:"id"`
+							Project struct {
+								ID string `json:"id"`
+							} `json:"project"`
+							FieldValues struct {
+								Nodes []struct {
+									Name  string `json:"name"`
+									Text  string `json:"text"`
+									Field struct {
+										Name string `json:"name"`
+									} `json:"field"`
+								} `json:"nodes"`
+							} `json:"fieldValues"`
+						} `json:"nodes"`
+					} `json:"projectItems"`
+				} `json:"issue"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		return liveWork{}, err
+	}
+	issue := response.Data.Repository.Issue
+	if issue.ID == "" {
+		return liveWork{}, errors.New("Issue not found")
+	}
+	state := liveWork{IssueID: issue.ID, IssueState: issue.State, UpdatedAt: issue.UpdatedAt}
+	if issue.Parent != nil {
+		state.ParentID = issue.Parent.ID
+	}
+	for _, blocker := range issue.BlockedBy.Nodes {
+		state.Blockers = append(state.Blockers, liveBlocker{ID: blocker.ID, State: blocker.State})
+	}
+	for _, item := range issue.ProjectItems.Nodes {
+		if item.Project.ID != c.Project.ID {
+			continue
+		}
+		state.ItemID = item.ID
+		for _, value := range item.FieldValues.Nodes {
+			switch value.Field.Name {
+			case "Status":
+				state.Status = value.Name
+			case "Lease holder":
+				state.Holder = value.Text
+			case "Lease expires":
+				state.Expiry = value.Text
+			case "Branch":
+				state.Branch = value.Text
+			}
+		}
+	}
+	if state.ItemID == "" {
+		return liveWork{}, errors.New("Issue is not a member of configured Project")
+	}
+	return state, nil
+}
+
+type projectField struct {
+	ID      string
+	Options map[string]string
+}
+
+func updateLiveWork(c model.Config, itemID string, state writer.WorkState) error {
+	fields, err := configuredProjectFields(c)
+	if err != nil {
+		return err
+	}
+	values := []struct {
+		name  string
+		value string
+		text  bool
+	}{
+		{"Lease holder", state.Lease.Holder, true},
+		{"Lease expires", leaseText(state.Lease.Expires), true},
+		{"Branch", state.Lease.Branch, true},
+		{"Status", state.Status, false},
+	}
+	for _, value := range values {
+		field, ok := fields[value.name]
+		if !ok {
+			return fmt.Errorf("configured Project lacks field %q", value.name)
+		}
+		args := []string{"project", "item-edit", "--id", itemID, "--project-id", c.Project.ID, "--field-id", field.ID}
+		if value.text {
+			if value.value == "" {
+				args = append(args, "--clear")
+			} else {
+				args = append(args, "--text", value.value)
+			}
+		} else {
+			option, ok := field.Options[value.value]
+			if !ok {
+				return fmt.Errorf("Project field %s has no option %q", value.name, value.value)
+			}
+			args = append(args, "--single-select-option-id", option)
+		}
+		if output, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("update %s: %s", value.name, strings.TrimSpace(string(output)))
+		}
+	}
+	return nil
+}
+
+func leaseText(expiry time.Time) string {
+	if expiry.IsZero() {
+		return ""
+	}
+	return expiry.UTC().Format(time.RFC3339)
+}
+
+func configuredProjectFields(c model.Config) (map[string]projectField, error) {
+	output, err := exec.Command("gh", "project", "field-list", fmt.Sprint(c.Project.Number), "--owner", c.Owner, "--format", "json").Output()
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Fields []struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Options []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"options"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		return nil, err
+	}
+	fields := make(map[string]projectField, len(response.Fields))
+	for _, raw := range response.Fields {
+		field := projectField{ID: raw.ID, Options: map[string]string{}}
+		for _, option := range raw.Options {
+			field.Options[option.Name] = option.ID
+		}
+		fields[raw.Name] = field
+	}
+	return fields, nil
 }

@@ -1,0 +1,110 @@
+package writer
+
+import (
+	"fmt"
+	"time"
+)
+
+// ApplyLifecycle turns one durable request into a complete Project-state value.
+// Network code applies this value only after fresh fingerprint verification.
+func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkState, error) {
+	now = now.UTC()
+	if request.Action == "status" && current.Status == "" {
+		if request.Status != "Backlog" {
+			return WorkState{}, fmt.Errorf("initial status must be Backlog")
+		}
+		current.Status = "Backlog"
+		return current, nil
+	}
+	if current.Status == "" {
+		current.Status = "Backlog"
+	}
+	switch request.Action {
+	case "status":
+		if request.Status == "" {
+			return WorkState{}, fmt.Errorf("status request requires status")
+		}
+		if err := RequireTransition(current.Status, request.Status); err != nil {
+			return WorkState{}, err
+		}
+		current.Status = request.Status
+		return current, nil
+	case "claim":
+		if err := RequireTransition(current.Status, "Claimed"); err != nil {
+			return WorkState{}, err
+		}
+		if current.Lease.Holder != "" && current.Lease.Expires.After(now) {
+			return WorkState{}, fmt.Errorf("issue already leased by %s until %s", current.Lease.Holder, current.Lease.Expires.UTC().Format(time.RFC3339))
+		}
+		if request.Actor == "" || request.Branch == "" {
+			return WorkState{}, fmt.Errorf("claim requires actor and branch")
+		}
+		expires, err := requestExpiry(request.LeaseExpiresAt, now)
+		if err != nil {
+			return WorkState{}, err
+		}
+		return WorkState{Status: "Claimed", Lease: Lease{Holder: request.Actor, Expires: expires, Branch: request.Branch}}, nil
+	case "start":
+		if err := activeHolder(current, request.Actor, now); err != nil {
+			return WorkState{}, err
+		}
+		if err := RequireTransition(current.Status, "In progress"); err != nil {
+			return WorkState{}, err
+		}
+		current.Status = "In progress"
+		return current, nil
+	case "renew":
+		if err := activeHolder(current, request.Actor, now); err != nil {
+			return WorkState{}, err
+		}
+		expires, err := requestExpiry(request.LeaseExpiresAt, now)
+		if err != nil {
+			return WorkState{}, err
+		}
+		current.Lease.Expires = expires
+		return current, nil
+	case "release":
+		if err := activeHolder(current, request.Actor, now); err != nil {
+			return WorkState{}, err
+		}
+		if err := RequireTransition(current.Status, "Ready"); err != nil {
+			return WorkState{}, err
+		}
+		return WorkState{Status: "Ready", Lease: Lease{Branch: current.Lease.Branch}}, nil
+	case "block":
+		if current.Lease.Holder != "" {
+			if err := activeHolder(current, request.Actor, now); err != nil {
+				return WorkState{}, err
+			}
+		}
+		if err := RequireTransition(current.Status, "Blocked"); err != nil {
+			return WorkState{}, err
+		}
+		return WorkState{Status: "Blocked", Lease: Lease{Branch: current.Lease.Branch}}, nil
+	case "resume":
+		if err := RequireTransition(current.Status, "Ready"); err != nil {
+			return WorkState{}, err
+		}
+		return WorkState{Status: "Ready", Lease: Lease{Branch: current.Lease.Branch}}, nil
+	default:
+		return WorkState{}, fmt.Errorf("unsupported lifecycle action %q", request.Action)
+	}
+}
+
+func activeHolder(current WorkState, actor string, now time.Time) error {
+	if actor == "" || current.Lease.Holder != actor || !current.Lease.Expires.After(now) {
+		return fmt.Errorf("active lease held by %q required", actor)
+	}
+	return nil
+}
+
+func requestExpiry(value string, now time.Time) (time.Time, error) {
+	if value == "" {
+		return now.Add(DefaultLeaseTTL), nil
+	}
+	expires, err := time.Parse(time.RFC3339, value)
+	if err != nil || !expires.After(now) || expires.After(now.Add(DefaultLeaseTTL)) {
+		return time.Time{}, fmt.Errorf("lease expiry must be after now and within %s", DefaultLeaseTTL)
+	}
+	return expires.UTC(), nil
+}
