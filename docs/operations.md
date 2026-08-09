@@ -10,6 +10,8 @@ Use `gfd context --issue-number N --json` to obtain Issue node ID and current st
 
 `gfd writer reconcile --apply` scans every open Issue, replays unreceipted requests, and returns expired Claimed/In progress leases to Ready while retaining branch context. Scheduled Writer runs invoke it every five minutes. Reconciliation writes an expiry receipt only once.
 
+On first active reconciliation, Writer fills blank Project Status (`Backlog`), Kind/Area from stable labels, Priority (`P2`), and Proof (`Not started`) without overwriting populated values. It adds `area:stable` only where legacy bootstrap Epics have no Area label, preserving field-label agreement.
+
 Evidence is a Writer request, never a free-form completion comment. `gfd evidence submit` requires `--pr`, final SHA, CI URL, exact commands, environments, criteria result, artifacts (`None: reason` allowed), documentation impact, residual risks (`None` allowed), and proof boundary. Valid evidence moves only In review work to Evidence pending and is preserved in Writer receipt JSON.
 
 `gfd pr link --issue-number N --issue-id ID --fingerprint SHA --pr URL --apply` records an open canonical PR request and moves only In progress work to In review. Evidence re-reads its PR and requires merged state plus exact merge-commit SHA match before any evidence state mutation.
