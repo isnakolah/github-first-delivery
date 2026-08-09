@@ -111,6 +111,20 @@ func TestRequestStatusReportJoinsReceipt(t *testing.T) {
 	}
 }
 
+func TestStandardProjectViews(t *testing.T) {
+	fields := map[string]int{}
+	for i, name := range []string{"Status", "Kind", "Area", "Priority", "Proof", "Lease holder", "Lease expires", "Branch", "State fingerprint", "Parent issue"} {
+		fields[name] = i + 1
+	}
+	views, err := standardProjectViews(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) != 5 || views[0].Name != "Roadmap" || views[2].Layout != "board" || views[2].GroupBy[0] != fields["Status"] {
+		t.Fatalf("views=%+v", views)
+	}
+}
+
 func TestContainsAndTitleCase(t *testing.T) {
 	if !contains([]string{"delivery", "core"}, "core") || contains([]string{"delivery"}, "ops") {
 		t.Fatal("configured area lookup is incorrect")

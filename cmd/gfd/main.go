@@ -368,6 +368,9 @@ func initCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := provisionProjectViews(*owner, projectInfo.Number); err != nil {
+		return err
+	}
 	c.Project.ID = projectInfo.ID
 	c.Project.Number = projectInfo.Number
 	c.Project.Fields = fieldIDs
@@ -507,6 +510,98 @@ func provisionProjectContract(owner, repo string, projectNumber int, areas []str
 		ids[key] = field.ID
 	}
 	return ids, nil
+}
+
+type restProjectField struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+type projectView struct {
+	Name          string `json:"name"`
+	Layout        string `json:"layout"`
+	Filter        string `json:"filter"`
+	VisibleFields []int  `json:"visible_fields,omitempty"`
+	GroupBy       []int  `json:"group_by,omitempty"`
+}
+
+func provisionProjectViews(owner string, projectNumber int) error {
+	endpoint, err := projectRESTEndpoint(owner, projectNumber)
+	if err != nil {
+		return err
+	}
+	output, err := ghOutput("api", endpoint+"/fields?per_page=100", "-H", "X-GitHub-Api-Version: 2026-03-10")
+	if err != nil {
+		return fmt.Errorf("list Project fields for views: %w", err)
+	}
+	var fields []restProjectField
+	if err := json.Unmarshal(output, &fields); err != nil {
+		return err
+	}
+	byName := make(map[string]int, len(fields))
+	for _, field := range fields {
+		byName[field.Name] = field.ID
+	}
+	views, err := standardProjectViews(byName)
+	if err != nil {
+		return err
+	}
+	for _, view := range views {
+		raw, err := json.Marshal(view)
+		if err != nil {
+			return err
+		}
+		cmd := exec.Command("gh", "api", "--method", "POST", endpoint+"/views", "-H", "X-GitHub-Api-Version: 2026-03-10", "--input", "-")
+		cmd.Stdin = strings.NewReader(string(raw))
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("create Project view %q: %s", view.Name, strings.TrimSpace(string(output)))
+		}
+	}
+	return nil
+}
+
+func projectRESTEndpoint(owner string, projectNumber int) (string, error) {
+	if _, err := ghOutput("api", "users/"+owner); err == nil {
+		return fmt.Sprintf("users/%s/projectsV2/%d", owner, projectNumber), nil
+	}
+	if _, err := ghOutput("api", "orgs/"+owner); err == nil {
+		return fmt.Sprintf("orgs/%s/projectsV2/%d", owner, projectNumber), nil
+	}
+	return "", fmt.Errorf("Project owner %q is neither a readable GitHub user nor organization", owner)
+}
+
+func standardProjectViews(fields map[string]int) ([]projectView, error) {
+	need := func(name string) (int, error) {
+		id, ok := fields[name]
+		if !ok || id == 0 {
+			return 0, fmt.Errorf("missing required Project field %q for standard views", name)
+		}
+		return id, nil
+	}
+	visibleNames := []string{"Status", "Kind", "Area", "Priority", "Proof", "Lease holder", "Lease expires", "Branch", "State fingerprint"}
+	visible := make([]int, 0, len(visibleNames))
+	for _, name := range visibleNames {
+		id, err := need(name)
+		if err != nil {
+			return nil, err
+		}
+		visible = append(visible, id)
+	}
+	status, err := need("Status")
+	if err != nil {
+		return nil, err
+	}
+	parent, err := need("Parent issue")
+	if err != nil {
+		return nil, err
+	}
+	return []projectView{
+		{Name: "Roadmap", Layout: "roadmap", Filter: "is:issue", GroupBy: []int{parent}},
+		{Name: "Agent queue", Layout: "table", Filter: "is:issue status:Ready", VisibleFields: visible},
+		{Name: "In flight", Layout: "board", Filter: "is:issue status:Claimed,\"In progress\",\"In review\"", VisibleFields: visible, GroupBy: []int{status}},
+		{Name: "Proof and gates", Layout: "table", Filter: "is:issue status:\"Evidence pending\",Blocked", VisibleFields: visible},
+		{Name: "Archive", Layout: "table", Filter: "is:issue status:Done,status:Cancelled,status:Archived", VisibleFields: visible},
+	}, nil
 }
 
 func setStatusOptions(fieldID string) error {
