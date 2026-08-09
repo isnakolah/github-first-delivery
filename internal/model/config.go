@@ -8,15 +8,16 @@ import (
 const ConfigVersion = 1
 
 type Config struct {
-	SchemaVersion int      `yaml:"schema_version" json:"schema_version"`
-	Owner         string   `yaml:"owner" json:"owner"`
-	Repository    string   `yaml:"repository" json:"repository"`
-	Project       Project  `yaml:"project" json:"project"`
-	Areas         []string `yaml:"areas" json:"areas"`
-	WikiMode      string   `yaml:"wiki_mode" json:"wiki_mode"`
-	DefaultBranch string   `yaml:"default_branch" json:"default_branch"`
-	WriterVersion string   `yaml:"writer_version" json:"writer_version"`
-	Policy        Policy   `yaml:"policy" json:"policy"`
+	SchemaVersion    int      `yaml:"schema_version" json:"schema_version"`
+	Owner            string   `yaml:"owner" json:"owner"`
+	Repository       string   `yaml:"repository" json:"repository"`
+	Project          Project  `yaml:"project" json:"project"`
+	Areas            []string `yaml:"areas" json:"areas"`
+	WikiMode         string   `yaml:"wiki_mode" json:"wiki_mode"`
+	DefaultBranch    string   `yaml:"default_branch" json:"default_branch"`
+	WriterVersion    string   `yaml:"writer_version" json:"writer_version"`
+	AuthorizedActors []string `yaml:"authorized_actors" json:"authorized_actors"`
+	Policy           Policy   `yaml:"policy" json:"policy"`
 }
 
 type Project struct {
@@ -46,6 +47,17 @@ func (c Config) Validate() error {
 	}
 	if len(c.Areas) == 0 {
 		return fmt.Errorf("at least one area is required")
+	}
+	if len(c.AuthorizedActors) == 0 {
+		return fmt.Errorf("at least one authorized actor is required")
+	}
+	actors := map[string]bool{}
+	for _, actor := range c.AuthorizedActors {
+		actor = strings.ToLower(strings.TrimSpace(actor))
+		if actor == "" || actors[actor] {
+			return fmt.Errorf("authorized actors must be nonempty and unique")
+		}
+		actors[actor] = true
 	}
 	seen := map[string]bool{}
 	for _, area := range c.Areas {

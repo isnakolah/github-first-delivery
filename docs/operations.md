@@ -4,6 +4,8 @@ Store `GFD_WRITER_TOKEN` only as an Actions secret. For a personal Project V2, G
 
 For local commands, `gfd` uses `GITHUB_TOKEN` when supplied; otherwise it reads the active `gh auth token` credential in memory for that invocation. It never writes either credential to repository config or cache.
 
+`authorized_actors` in `.github/gfd/config.yaml` is stable Writer authorization, initially repository owner only. Add a GitHub login through reviewed source change before that person or agent may submit a Writer request. Public Issue comments alone never authorize a mutation.
+
 All changing commands require `--apply`; bootstrap requires `--yes`. `gfd context` is first command for agents. Claim leaf work before branch/edit. Submit evidence with final SHA, PR/CI URLs, commands, environments, acceptance result, artifacts, documentation, risks, and proof boundary. A merged PR alone is not Done.
 
 `gfd init` creates Kind, Area, Priority, Proof, lease, branch, and fingerprint fields; replaces Project Status options with canonical lifecycle values; creates configured `area:*` labels; and persists resolved field IDs in `.github/gfd/config.yaml`. It is safe only for fresh bootstrap repositories.

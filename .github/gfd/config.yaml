@@ -19,6 +19,7 @@ areas: [stable]
 wiki_mode: journal
 default_branch: main
 writer_version: 0.0.0-dev
+authorized_actors: [isnakolah]
 policy:
   lease_ttl_minutes: 120
   reconcile_minutes: 5

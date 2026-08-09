@@ -148,6 +148,12 @@ func TestSelectReadyWorkRequiresValidContract(t *testing.T) {
 	}
 }
 
+func TestAuthorizedActor(t *testing.T) {
+	if !authorizedActor([]string{"isnakolah"}, "IsNaKoLaH") || authorizedActor([]string{"isnakolah"}, "other") {
+		t.Fatal("unexpected authorization result")
+	}
+}
+
 func TestContainsAndTitleCase(t *testing.T) {
 	if !contains([]string{"delivery", "core"}, "core") || contains([]string{"delivery"}, "ops") {
 		t.Fatal("configured area lookup is incorrect")
