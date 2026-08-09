@@ -104,3 +104,13 @@ func (c *Client) ListComments(ctx context.Context, owner, repo string, number in
 	err := c.Do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/issues/%d/comments?per_page=100", owner, repo, number), nil, &result)
 	return result, err
 }
+
+// SetIssueState changes only the GitHub Issue open/closed state. The Writer
+// calls it after a verified completion transition, or to recover a premature
+// manual close. It deliberately does not alter labels or Project fields.
+func (c *Client) SetIssueState(ctx context.Context, owner, repo string, number int, state string) error {
+	if state != "open" && state != "closed" {
+		return fmt.Errorf("unsupported Issue state %q", state)
+	}
+	return c.Do(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, number), map[string]string{"state": state}, nil)
+}

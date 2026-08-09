@@ -790,7 +790,7 @@ func writerCommand(args []string) error {
 	receiptsApplied := 0
 	if *apply {
 		for _, item := range pending {
-			receipt := applyWriterRequest(c, *number, item.Request)
+			receipt := applyWriterRequest(c, *number, item.Request, comments)
 			rejected = append(rejected, receipt)
 		}
 		for _, receipt := range rejected {
@@ -822,7 +822,7 @@ func writerReconcileCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	output, err := ghOutput("issue", "list", "--repo", c.Owner+"/"+c.Repository, "--state", "open", "--limit", "100", "--json", "number")
+	output, err := ghOutput("issue", "list", "--repo", c.Owner+"/"+c.Repository, "--state", "all", "--limit", "100", "--json", "number")
 	if err != nil {
 		return err
 	}
@@ -854,7 +854,7 @@ func reconcileIssue(c model.Config, number int, apply bool) (int, int, error) {
 	receipted := 0
 	if apply {
 		for _, item := range pending {
-			rejected = append(rejected, applyWriterRequest(c, number, item.Request))
+			rejected = append(rejected, applyWriterRequest(c, number, item.Request, comments))
 		}
 		for _, receipt := range rejected {
 			body, err := writer.RejectionComment(receipt)
@@ -870,6 +870,26 @@ func reconcileIssue(c model.Config, number int, apply bool) (int, int, error) {
 	state, err := loadLiveWork(c, number)
 	if err != nil {
 		return receipted, 0, err
+	}
+	if state.IssueState == "CLOSED" && !terminalIssueStatus(state.Status) && hasWriterReceipt(comments) {
+		if !apply {
+			return receipted, 0, nil
+		}
+		if err := client.SetIssueState(context.Background(), c.Owner, c.Repository, number, "open"); err != nil {
+			return receipted, 0, fmt.Errorf("reopen prematurely closed Issue: %w", err)
+		}
+		requestID := "premature-close-" + state.IssueID + "-" + state.UpdatedAt
+		body, err := writer.RenderReceipt(writer.Receipt{RequestID: requestID, Result: "accepted", Detail: "manual close denied; Issue reopened because completion evidence is incomplete", At: time.Now().UTC()})
+		if err != nil {
+			return receipted, 0, err
+		}
+		if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, number, body); err != nil {
+			return receipted, 0, err
+		}
+		return receipted + 1, 0, nil
+	}
+	if state.IssueState == "CLOSED" {
+		return receipted, 0, nil
 	}
 	if apply {
 		if err := initializeProjectFields(c, number, state); err != nil {
@@ -907,6 +927,19 @@ func reconcileIssue(c model.Config, number int, apply bool) (int, int, error) {
 	return receipted + 1, 1, nil
 }
 
+func terminalIssueStatus(status string) bool {
+	return status == "Done" || status == "Cancelled" || status == "Archived"
+}
+
+func hasWriterReceipt(comments []github.Comment) bool {
+	for _, comment := range comments {
+		if _, err := writer.ParseReceipt(comment.Body); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
 type liveWork struct {
 	IssueID    string
 	IssueState string
@@ -926,7 +959,7 @@ type liveWork struct {
 
 type liveBlocker struct{ ID, State string }
 
-func applyWriterRequest(c model.Config, number int, request writer.Request) writer.Receipt {
+func applyWriterRequest(c model.Config, number int, request writer.Request, comments []github.Comment) writer.Receipt {
 	state, err := loadLiveWork(c, number)
 	if err != nil {
 		return rejectedReceipt(request, err)
@@ -938,12 +971,15 @@ func applyWriterRequest(c model.Config, number int, request writer.Request) writ
 	if err != nil {
 		return writer.Receipt{RequestID: request.ID, Fingerprint: actual, Result: "rejected", Detail: err.Error(), At: time.Now().UTC()}
 	}
-	if request.Action == "claim" {
+	if request.Action == "claim" || (request.Action == "status" && request.Status == "Done") {
 		for _, blocker := range state.Blockers {
 			if blocker.State != "CLOSED" {
-				return rejectedReceipt(request, fmt.Errorf("unresolved blocker %s prevents claim", blocker.ID))
+				return rejectedReceipt(request, fmt.Errorf("unresolved blocker %s prevents %s", blocker.ID, request.Action))
 			}
 		}
+	}
+	if request.Action == "status" && request.Status == "Done" && !acceptedEvidence(comments) {
+		return rejectedReceipt(request, errors.New("Done requires a prior accepted evidence receipt"))
 	}
 	if request.Action == "pr.link" {
 		if err := validateReviewPR(request.PR); err != nil {
@@ -966,12 +1002,28 @@ func applyWriterRequest(c model.Config, number int, request writer.Request) writ
 	if err := updateLiveWork(c, state.ItemID, next); err != nil {
 		return rejectedReceipt(request, err)
 	}
+	if next.Status == "Done" {
+		if err := github.NewClient().SetIssueState(context.Background(), c.Owner, c.Repository, number, "closed"); err != nil {
+			return rejectedReceipt(request, fmt.Errorf("close completed Issue: %w", err))
+		}
+	}
 	receipt := writer.Receipt{RequestID: request.ID, Fingerprint: actual, Result: "accepted", Detail: "lifecycle state changed to " + next.Status, At: time.Now().UTC()}
 	if request.Action == "evidence.submit" {
 		receipt.Detail = "evidence recorded; lifecycle state changed to Evidence pending"
 		receipt.Evidence = request.Evidence
 	}
+	if next.Status == "Done" {
+		receipt.Detail = "completion evidence verified; lifecycle state changed to Done and Issue closed"
+	}
 	return receipt
+}
+
+func acceptedEvidence(comments []github.Comment) bool {
+	bodies := make([]string, 0, len(comments))
+	for _, comment := range comments {
+		bodies = append(bodies, comment.Body)
+	}
+	return writer.HasAcceptedEvidence(bodies)
 }
 
 func validateReviewPR(pr string) error {
