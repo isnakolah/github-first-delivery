@@ -435,7 +435,15 @@ func validateCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	query := fmt.Sprintf("query { repository(owner:\"%s\",name:\"%s\") { issues(first:100,states:[OPEN]) { nodes { id number body parent { id } labels(first:20) { nodes { name } } } } } }", c.Owner, c.Repository)
+	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issues(first:100,states:[OPEN,CLOSED]) { nodes {
+id number body state parent { id }
+blockedBy(first:100) { nodes { id } }
+labels(first:100) { nodes { name } }
+projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
+... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
+... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
+} } } }
+} } } }`, c.Owner, c.Repository)
 	output, err := exec.Command("gh", "api", "graphql", "-f", "query="+query).Output()
 	if err != nil {
 		return err
@@ -448,14 +456,33 @@ func validateCommand(args []string) error {
 						ID     string `json:"id"`
 						Number int    `json:"number"`
 						Body   string `json:"body"`
+						State  string `json:"state"`
 						Parent *struct {
 							ID string `json:"id"`
 						} `json:"parent"`
+						BlockedBy struct {
+							Nodes []struct {
+								ID string `json:"id"`
+							} `json:"nodes"`
+						} `json:"blockedBy"`
 						Labels struct {
 							Nodes []struct {
 								Name string `json:"name"`
 							} `json:"nodes"`
 						} `json:"labels"`
+						ProjectItems struct {
+							Nodes []struct {
+								FieldValues struct {
+									Nodes []struct {
+										Name  string `json:"name"`
+										Text  string `json:"text"`
+										Field struct {
+											Name string `json:"name"`
+										} `json:"field"`
+									} `json:"nodes"`
+								} `json:"fieldValues"`
+							} `json:"nodes"`
+						} `json:"projectItems"`
 					} `json:"nodes"`
 				} `json:"issues"`
 			} `json:"repository"`
@@ -466,21 +493,49 @@ func validateCommand(args []string) error {
 	}
 	issues := make([]model.Issue, 0, len(response.Data.Repository.Issues.Nodes))
 	for _, node := range response.Data.Repository.Issues.Nodes {
-		kind := ""
+		kind, area := "", ""
 		for _, label := range node.Labels.Nodes {
 			if strings.HasPrefix(label.Name, "kind:") {
 				kind = strings.TrimPrefix(label.Name, "kind:")
 				kind = strings.ToUpper(kind[:1]) + kind[1:]
+			}
+			if strings.HasPrefix(label.Name, "area:") {
+				area = strings.TrimPrefix(label.Name, "area:")
+			}
+		}
+		status, projectKind, projectArea, branch := "", "", "", ""
+		for _, item := range node.ProjectItems.Nodes {
+			for _, value := range item.FieldValues.Nodes {
+				switch value.Field.Name {
+				case "Status":
+					status = value.Name
+				case "Kind":
+					projectKind = value.Name
+				case "Area":
+					projectArea = value.Name
+				case "Branch":
+					branch = value.Text
+				}
 			}
 		}
 		parent := ""
 		if node.Parent != nil {
 			parent = node.Parent.ID
 		}
-		issues = append(issues, model.Issue{ID: node.ID, Number: node.Number, Kind: kind, ParentID: parent, Body: node.Body})
+		blockers := make([]string, 0, len(node.BlockedBy.Nodes))
+		for _, blocker := range node.BlockedBy.Nodes {
+			blockers = append(blockers, blocker.ID)
+		}
+		issues = append(issues, model.Issue{ID: node.ID, Number: node.Number, Kind: kind, Status: status, State: node.State, Area: area, ProjectKind: projectKind, ProjectArea: projectArea, Branch: branch, ParentID: parent, BlockerIDs: blockers, Body: node.Body})
 	}
 	err = model.ValidateGraph(issues)
-	report := map[string]any{"repository": c.Owner + "/" + c.Repository, "open_issues": len(issues), "valid": err == nil}
+	openIssues := 0
+	for _, issue := range issues {
+		if issue.State != "CLOSED" {
+			openIssues++
+		}
+	}
+	report := map[string]any{"repository": c.Owner + "/" + c.Repository, "open_issues": openIssues, "valid": err == nil}
 	if *asJSON {
 		if err != nil {
 			report["error"] = err.Error()
@@ -490,7 +545,7 @@ func validateCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("valid: %d open Issues\n", len(issues))
+	fmt.Printf("valid: %d open Issues\n", openIssues)
 	return nil
 }
 
