@@ -220,6 +220,10 @@ func adoptCommand(args []string) error {
 	fs := flag.NewFlagSet("adopt", flag.ContinueOnError)
 	owner := fs.String("owner", "", "GitHub owner")
 	repo := fs.String("repo", "", "repository")
+	projectNumber := fs.Int("project-number", 0, "existing GitHub Project number")
+	wiki := fs.String("wiki", "off", "off|journal")
+	branch := fs.String("default-branch", "main", "default branch")
+	areas := fs.String("areas", "stable", "comma-separated areas")
 	apply := applyFlag(fs)
 	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args); err != nil {
@@ -243,13 +247,24 @@ func adoptCommand(args []string) error {
 	if len(issues) != 0 {
 		return errors.New("adopt refuses repository with existing Issues; audit and migrate explicitly")
 	}
+	if *projectNumber < 1 {
+		return errors.New("adopt --apply requires --project-number for an existing Project")
+	}
 	if _, err := os.Stat(configPath); err == nil {
 		return fmt.Errorf("%s already exists", configPath)
 	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return err
 	}
-	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: "off", DefaultBranch: "main", Areas: []string{"stable"}, WriterVersion: version, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{Fields: map[string]string{}}}
+	projectInfo, err := readProject(*owner, *projectNumber)
+	if err != nil {
+		return err
+	}
+	fieldIDs, err := configuredFieldIDs(*owner, *projectNumber)
+	if err != nil {
+		return err
+	}
+	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: *wiki, DefaultBranch: *branch, Areas: split(*areas), WriterVersion: version, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{ID: projectInfo.ID, Number: *projectNumber, Title: projectInfo.Title, Fields: fieldIDs}}
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -261,6 +276,48 @@ func adoptCommand(args []string) error {
 		return err
 	}
 	return printValue(report, *asJSON)
+}
+
+func readProject(owner string, number int) (createdProject, error) {
+	output, err := ghOutput("project", "view", fmt.Sprint(number), "--owner", owner, "--format", "json")
+	if err != nil {
+		return createdProject{}, fmt.Errorf("read Project #%d: %w", number, err)
+	}
+	var project struct {
+		ID     string `json:"id"`
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+	}
+	if err := json.Unmarshal(output, &project); err != nil {
+		return createdProject{}, err
+	}
+	if project.ID == "" || project.Number != number || project.Title == "" {
+		return createdProject{}, fmt.Errorf("Project #%d returned incomplete identity", number)
+	}
+	return createdProject{ID: project.ID, Number: project.Number, Title: project.Title}, nil
+}
+
+func configuredFieldIDs(owner string, projectNumber int) (map[string]string, error) {
+	fields, err := readProjectFields(owner, projectNumber)
+	if err != nil {
+		return nil, err
+	}
+	return configuredFieldIDsFromMap(projectNumber, fields)
+}
+
+func configuredFieldIDsFromMap(projectNumber int, fields map[string]projectField) (map[string]string, error) {
+	ids := make(map[string]string, 8)
+	for key, name := range map[string]string{
+		"status": "Status", "kind": "Kind", "area": "Area", "priority": "Priority", "proof": "Proof",
+		"lease_holder": "Lease holder", "lease_expires": "Lease expires", "branch": "Branch", "state_fingerprint": "State fingerprint",
+	} {
+		field, ok := fields[name]
+		if !ok || field.ID == "" {
+			return nil, fmt.Errorf("Project #%d missing required field %q", projectNumber, name)
+		}
+		ids[key] = field.ID
+	}
+	return ids, nil
 }
 func usage() error {
 	return errors.New("usage: gfd {init|doctor|context|validate|request|work|evidence|journal|version}")
@@ -368,6 +425,7 @@ func initializeBootstrapRepository(owner, repo, branch string) error {
 type createdProject struct {
 	ID     string `json:"id"`
 	Number int    `json:"number"`
+	Title  string `json:"title"`
 }
 
 func provisionGitHub(owner, repo, visibility, projectName string) (createdProject, error) {
@@ -395,6 +453,7 @@ func provisionGitHub(owner, repo, visibility, projectName string) (createdProjec
 	if project.ID == "" || project.Number == 0 {
 		return createdProject{}, errors.New("GitHub returned incomplete Project identity")
 	}
+	project.Title = projectName
 	return project, nil
 }
 
@@ -689,9 +748,79 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 
 func requestCommand(args []string) error {
 	if len(args) == 0 || args[0] != "status" {
-		return errors.New("usage: gfd request status --issue-number N --issue-id ID --action ACTION --actor ACTOR --fingerprint SHA --apply")
+		return errors.New("usage: gfd request status --issue-number N [--request-id ID] [--json] | --issue-id ID --fingerprint SHA --status STATUS --apply")
 	}
-	return submitRequest("status", args[1:], nil)
+	if contains(args[1:], "--apply") {
+		return submitRequest("status", args[1:], nil)
+	}
+	fs := flag.NewFlagSet("request status", flag.ContinueOnError)
+	number := fs.Int("issue-number", 0, "Issue number")
+	requestID := fs.String("request-id", "", "request ID")
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if *number < 1 {
+		return errors.New("request status requires --issue-number")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	comments, err := github.NewClient().ListComments(context.Background(), c.Owner, c.Repository, *number)
+	if err != nil {
+		return err
+	}
+	report := requestStatusReport(comments, *requestID)
+	if len(report) == 0 && *requestID != "" {
+		return fmt.Errorf("request %q not found on Issue #%d", *requestID, *number)
+	}
+	if *asJSON {
+		return printValue(map[string]any{"issue_number": *number, "requests": report}, true)
+	}
+	for _, item := range report {
+		fmt.Printf("%s %s %s %s\n", item.ID, item.Action, item.State, item.Detail)
+	}
+	return nil
+}
+
+type requestStatus struct {
+	ID      string `json:"id"`
+	Action  string `json:"action"`
+	Actor   string `json:"actor"`
+	State   string `json:"state"`
+	Detail  string `json:"detail,omitempty"`
+	Receipt string `json:"receipt_fingerprint,omitempty"`
+}
+
+func requestStatusReport(comments []github.Comment, onlyID string) []requestStatus {
+	requests := make(map[string]requestStatus)
+	order := make([]string, 0)
+	for _, comment := range comments {
+		request, err := writer.ParseRequest(comment.Body)
+		if err != nil || (onlyID != "" && request.ID != onlyID) {
+			continue
+		}
+		requests[request.ID] = requestStatus{ID: request.ID, Action: request.Action, Actor: request.Actor, State: "pending"}
+		order = append(order, request.ID)
+	}
+	for _, comment := range comments {
+		receipt, err := writer.ParseReceipt(comment.Body)
+		if err != nil {
+			continue
+		}
+		item, ok := requests[receipt.RequestID]
+		if !ok {
+			continue
+		}
+		item.State, item.Detail, item.Receipt = receipt.Result, receipt.Detail, receipt.Fingerprint
+		requests[receipt.RequestID] = item
+	}
+	report := make([]requestStatus, 0, len(order))
+	for _, id := range order {
+		report = append(report, requests[id])
+	}
+	return report
 }
 func workCommand(args []string) error {
 	if len(args) == 0 {

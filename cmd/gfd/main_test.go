@@ -89,6 +89,28 @@ func TestRequireEmptyBootstrapRoot(t *testing.T) {
 	}
 }
 
+func TestConfiguredFieldIDsRejectsMissingRequiredFields(t *testing.T) {
+	if _, err := configuredFieldIDsFromMap(4, map[string]projectField{"Status": {ID: "PVTSSF_status"}}); err == nil {
+		t.Fatal("expected missing field error")
+	}
+}
+
+func TestRequestStatusReportJoinsReceipt(t *testing.T) {
+	request := writer.Request{ID: "r1", Action: "claim", IssueID: "I1", Actor: "agent", ExpectedFingerprint: "fingerprint"}
+	requestBody, err := writer.RenderRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptBody, err := writer.RenderReceipt(writer.Receipt{RequestID: "r1", Fingerprint: "fresh", Result: "accepted", Detail: "claimed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := requestStatusReport([]github.Comment{{Body: requestBody}, {Body: receiptBody}}, "")
+	if len(report) != 1 || report[0].State != "accepted" || report[0].Detail != "claimed" {
+		t.Fatalf("report=%+v", report)
+	}
+}
+
 func TestContainsAndTitleCase(t *testing.T) {
 	if !contains([]string{"delivery", "core"}, "core") || contains([]string{"delivery"}, "ops") {
 		t.Fatal("configured area lookup is incorrect")
