@@ -18,6 +18,7 @@ type Issue struct {
 	Branch      string   `json:"branch"`
 	ParentID    string   `json:"parent_id"`
 	BlockerIDs  []string `json:"blocker_ids"`
+	Labels      []string `json:"labels"`
 	Body        string   `json:"body"`
 }
 
@@ -89,6 +90,23 @@ func ValidateGraph(issues []Issue) error {
 		}
 		if issue.ProjectKind == "" {
 			problems.add("issue #%d has no Project Kind", issue.Number)
+		}
+		kindLabels, areaLabels := 0, 0
+		for _, label := range issue.Labels {
+			switch {
+			case strings.HasPrefix(label, "status:"):
+				problems.add("issue #%d uses forbidden status label %q", issue.Number, label)
+			case strings.HasPrefix(label, "kind:"):
+				kindLabels++
+			case strings.HasPrefix(label, "area:"):
+				areaLabels++
+			}
+		}
+		if issue.Kind != "" && kindLabels != 1 {
+			problems.add("issue #%d must have exactly one kind:* label", issue.Number)
+		}
+		if issue.Area != "" && areaLabels != 1 {
+			problems.add("issue #%d must have exactly one area:* label", issue.Number)
 		}
 		if issue.Kind == "Epic" && issue.Branch != "" {
 			problems.add("Epic #%d cannot own implementation branch %q", issue.Number, issue.Branch)

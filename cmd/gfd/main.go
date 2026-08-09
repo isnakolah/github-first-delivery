@@ -895,7 +895,9 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 	issues := make([]model.Issue, 0, len(response.Data.Repository.Issues.Nodes))
 	for _, node := range response.Data.Repository.Issues.Nodes {
 		kind, area := "", ""
+		labels := make([]string, 0, len(node.Labels.Nodes))
 		for _, label := range node.Labels.Nodes {
+			labels = append(labels, label.Name)
 			if strings.HasPrefix(label.Name, "kind:") {
 				kind = strings.TrimPrefix(label.Name, "kind:")
 				kind = strings.ToUpper(kind[:1]) + kind[1:]
@@ -927,7 +929,7 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 		for _, blocker := range node.BlockedBy.Nodes {
 			blockers = append(blockers, blocker.ID)
 		}
-		issues = append(issues, model.Issue{ID: node.ID, Number: node.Number, Kind: kind, Status: status, State: node.State, Area: area, ProjectKind: projectKind, ProjectArea: projectArea, Branch: branch, ParentID: parent, BlockerIDs: blockers, Body: node.Body})
+		issues = append(issues, model.Issue{ID: node.ID, Number: node.Number, Kind: kind, Status: status, State: node.State, Area: area, ProjectKind: projectKind, ProjectArea: projectArea, Branch: branch, ParentID: parent, BlockerIDs: blockers, Labels: labels, Body: node.Body})
 	}
 	err = model.ValidateGraph(issues)
 	openIssues := 0

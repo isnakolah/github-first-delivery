@@ -59,8 +59,8 @@ func TestValidateGraphRejectsClassificationMismatchAndEpicBranch(t *testing.T) {
 
 func TestValidateGraphAcceptsCompleteGraph(t *testing.T) {
 	issues := []Issue{
-		{ID: "a", Number: 1, Kind: "Epic", Status: "Backlog", ProjectKind: "Epic"},
-		{ID: "b", Number: 2, Kind: "Story", ParentID: "a", Body: WorkBody("x", "x", "x", "x", "x", "None: x", "x", "CI"), Status: "Backlog", Area: "stable", ProjectKind: "Story", ProjectArea: "stable"},
+		{ID: "a", Number: 1, Kind: "Epic", Status: "Backlog", ProjectKind: "Epic", Labels: []string{"kind:epic"}},
+		{ID: "b", Number: 2, Kind: "Story", ParentID: "a", Body: WorkBody("x", "x", "x", "x", "x", "None: x", "x", "CI"), Status: "Backlog", Area: "stable", ProjectKind: "Story", ProjectArea: "stable", Labels: []string{"kind:story", "area:stable"}},
 	}
 	if err := ValidateGraph(issues); err != nil {
 		t.Fatal(err)
