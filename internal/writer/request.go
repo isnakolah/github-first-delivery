@@ -27,8 +27,8 @@ type Request struct {
 type Evidence struct{ FinalSHA, CIURL, Commands, Environments, Criteria, Artifacts, Documentation, Risks, Boundary string }
 
 func (e Evidence) Validate() error {
-	if e.FinalSHA == "" || e.CIURL == "" || e.Commands == "" || e.Environments == "" || e.Criteria == "" || e.Documentation == "" || e.Boundary == "" {
-		return fmt.Errorf("evidence requires final SHA, CI URL, commands, environments, criteria, documentation, and proof boundary")
+	if e.FinalSHA == "" || e.CIURL == "" || e.Commands == "" || e.Environments == "" || e.Criteria == "" || e.Artifacts == "" || e.Documentation == "" || e.Risks == "" || e.Boundary == "" {
+		return fmt.Errorf("evidence requires final SHA, CI URL, commands, environments, criteria, artifacts, documentation, risks, and proof boundary")
 	}
 	return nil
 }
@@ -38,6 +38,7 @@ type Receipt struct {
 	Fingerprint string    `json:"fingerprint"`
 	Result      string    `json:"result"`
 	Detail      string    `json:"detail"`
+	Evidence    *Evidence `json:"evidence,omitempty"`
 	At          time.Time `json:"at"`
 }
 

@@ -10,4 +10,6 @@ Use `gfd context --issue-number N --json` to obtain Issue node ID and current st
 
 `gfd writer reconcile --apply` scans every open Issue, replays unreceipted requests, and returns expired Claimed/In progress leases to Ready while retaining branch context. Scheduled Writer runs invoke it every five minutes. Reconciliation writes an expiry receipt only once.
 
+Evidence is a Writer request, never a free-form completion comment. `gfd evidence submit` requires `--pr`, final SHA, CI URL, exact commands, environments, criteria result, artifacts (`None: reason` allowed), documentation impact, residual risks (`None` allowed), and proof boundary. Valid evidence moves only In review work to Evidence pending and is preserved in Writer receipt JSON.
+
 Wiki journal is generated from receipts and is noncanonical. If Wiki write fails, Writer leaves work at Evidence pending and reconciliation retries.
