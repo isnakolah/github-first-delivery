@@ -1262,25 +1262,39 @@ func leaseText(expiry time.Time) string {
 }
 
 func configuredProjectFields(c model.Config) (map[string]projectField, error) {
-	output, err := ghOutput("project", "field-list", fmt.Sprint(c.Project.Number), "--owner", c.Owner, "--format", "json")
+	// Resolve fields from the configured Project node instead of `gh project
+	// field-list --owner`. The latter resolves a user account first, which is
+	// unavailable to a least-privilege Writer token even when it can mutate the
+	// Project by ID.
+	query := fmt.Sprintf(`query { node(id:%q) { ... on ProjectV2 { fields(first:100) { nodes {
+... on ProjectV2Field { id name }
+... on ProjectV2SingleSelectField { id name options { id name } }
+} } } } }`, c.Project.ID)
+	output, err := ghOutput("api", "graphql", "-f", "query="+query)
 	if err != nil {
 		return nil, err
 	}
 	var response struct {
-		Fields []struct {
-			ID      string `json:"id"`
-			Name    string `json:"name"`
-			Options []struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
-			} `json:"options"`
-		} `json:"fields"`
+		Data struct {
+			Node struct {
+				Fields struct {
+					Nodes []struct {
+						ID      string `json:"id"`
+						Name    string `json:"name"`
+						Options []struct {
+							ID   string `json:"id"`
+							Name string `json:"name"`
+						} `json:"options"`
+					} `json:"nodes"`
+				} `json:"fields"`
+			} `json:"node"`
+		} `json:"data"`
 	}
 	if err := json.Unmarshal(output, &response); err != nil {
 		return nil, err
 	}
-	fields := make(map[string]projectField, len(response.Fields))
-	for _, raw := range response.Fields {
+	fields := make(map[string]projectField, len(response.Data.Node.Fields.Nodes))
+	for _, raw := range response.Data.Node.Fields.Nodes {
 		field := projectField{ID: raw.ID, Options: map[string]string{}}
 		for _, option := range raw.Options {
 			field.Options[option.Name] = option.ID
