@@ -56,11 +56,60 @@ func run(args []string) error {
 		return configureCommand(args[1:])
 	case "writer":
 		return writerCommand(args[1:])
-	case "policy", "issue", "pr", "adopt":
+	case "adopt":
+		return adoptCommand(args[1:])
+	case "policy", "issue", "pr":
 		return fmt.Errorf("%s is reserved; implementation tracked through GitHub Project", args[0])
 	default:
 		return usage()
 	}
+}
+
+func adoptCommand(args []string) error {
+	fs := flag.NewFlagSet("adopt", flag.ContinueOnError)
+	owner := fs.String("owner", "", "GitHub owner")
+	repo := fs.String("repo", "", "repository")
+	apply := applyFlag(fs)
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *owner == "" || *repo == "" {
+		return errors.New("--owner and --repo are required")
+	}
+	output, err := exec.Command("gh", "api", "repos/"+*owner+"/"+*repo+"/issues?state=all&per_page=100").Output()
+	if err != nil {
+		return fmt.Errorf("audit repository: %w", err)
+	}
+	var issues []json.RawMessage
+	if err := json.Unmarshal(output, &issues); err != nil {
+		return err
+	}
+	report := map[string]any{"owner": *owner, "repository": *repo, "issues_found": len(issues), "safe_to_adopt": len(issues) == 0, "note": "adopt never reclassifies existing Issues"}
+	if !*apply {
+		return printValue(report, *asJSON)
+	}
+	if len(issues) != 0 {
+		return errors.New("adopt refuses repository with existing Issues; audit and migrate explicitly")
+	}
+	if _, err := os.Stat(configPath); err == nil {
+		return fmt.Errorf("%s already exists", configPath)
+	}
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return err
+	}
+	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: "off", DefaultBranch: "main", Areas: []string{"stable"}, WriterVersion: version, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{Fields: map[string]string{}}}
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	raw, err := yaml.Marshal(c)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(configPath, raw, 0644); err != nil {
+		return err
+	}
+	return printValue(report, *asJSON)
 }
 func usage() error {
 	return errors.New("usage: gfd {init|doctor|context|validate|request|work|evidence|journal|version}")
