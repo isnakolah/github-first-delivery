@@ -492,7 +492,7 @@ func doctor(args []string) error {
 		return err
 	}
 	c, err := loadConfig()
-	report := map[string]any{"gfd_version": version, "config": err == nil, "github_token": os.Getenv("GITHUB_TOKEN") != "", "repository": ""}
+	report := map[string]any{"gfd_version": version, "config": err == nil, "github_token": github.NewClient().Token != "", "repository": ""}
 	if err == nil {
 		report["repository"] = c.Owner + "/" + c.Repository
 	}
