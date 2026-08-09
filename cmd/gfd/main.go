@@ -841,7 +841,7 @@ id number body state parent { id }
 blockedBy(first:100) { nodes { id } }
 labels(first:100) { nodes { name } }
 comments(first:100) { nodes { body author { login } } }
-projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
+projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
 } } } }
@@ -882,6 +882,9 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 						} `json:"comments"`
 						ProjectItems struct {
 							Nodes []struct {
+								Project struct {
+									ID string `json:"id"`
+								} `json:"project"`
 								FieldValues struct {
 									Nodes []struct {
 										Name  string `json:"name"`
@@ -917,6 +920,9 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 		}
 		status, projectKind, projectArea, branch := "", "", "", ""
 		for _, item := range node.ProjectItems.Nodes {
+			if item.Project.ID != c.Project.ID {
+				continue
+			}
 			for _, value := range item.FieldValues.Nodes {
 				switch value.Field.Name {
 				case "Status":
