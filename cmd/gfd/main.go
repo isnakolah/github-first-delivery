@@ -293,6 +293,9 @@ func initCommand(args []string) error {
 	if *visibility != "public" && *visibility != "private" {
 		return errors.New("visibility must be public or private")
 	}
+	if err := requireEmptyBootstrapRoot("."); err != nil {
+		return err
+	}
 	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: *wiki, DefaultBranch: *branch, Areas: split(*areas), WriterVersion: version, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{Title: *project, Fields: map[string]string{}}}
 	if err := c.Validate(); err != nil {
 		return err
@@ -311,7 +314,7 @@ func initCommand(args []string) error {
 	c.Project.ID = projectInfo.ID
 	c.Project.Number = projectInfo.Number
 	c.Project.Fields = fieldIDs
-	if err := bootstrap.Install(".", *owner, projectInfo.Number); err != nil {
+	if err := bootstrap.Install(".", *owner, projectInfo.Number, *branch); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
@@ -324,7 +327,41 @@ func initCommand(args []string) error {
 	if err := os.WriteFile(configPath, raw, 0644); err != nil {
 		return err
 	}
+	if err := initializeBootstrapRepository(*owner, *repo, *branch); err != nil {
+		return fmt.Errorf("GitHub repository and Project were provisioned, but local bootstrap push failed: %w", err)
+	}
 	fmt.Printf("provisioned %s/%s and Project #%d; wrote %s\n", *owner, *repo, projectInfo.Number, configPath)
+	return nil
+}
+
+func requireEmptyBootstrapRoot(root string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return errors.New("init requires an empty directory; use gfd adopt --apply after its audit for an existing repository")
+	}
+	return nil
+}
+
+func initializeBootstrapRepository(owner, repo, branch string) error {
+	if output, err := exec.Command("git", "init", "--initial-branch", branch).CombinedOutput(); err != nil {
+		return fmt.Errorf("git init: %s", strings.TrimSpace(string(output)))
+	}
+	if output, err := exec.Command("git", "add", ".").CombinedOutput(); err != nil {
+		return fmt.Errorf("git add: %s", strings.TrimSpace(string(output)))
+	}
+	if output, err := exec.Command("git", "commit", "-m", "chore(gfd): bootstrap GitHub-first delivery").CombinedOutput(); err != nil {
+		return fmt.Errorf("git commit: %s", strings.TrimSpace(string(output)))
+	}
+	remote := "https://github.com/" + owner + "/" + repo + ".git"
+	if output, err := exec.Command("git", "remote", "add", "origin", remote).CombinedOutput(); err != nil {
+		return fmt.Errorf("git remote add: %s", strings.TrimSpace(string(output)))
+	}
+	if output, err := exec.Command("git", "push", "--set-upstream", "origin", branch).CombinedOutput(); err != nil {
+		return fmt.Errorf("git push: %s", strings.TrimSpace(string(output)))
+	}
 	return nil
 }
 
@@ -343,6 +380,9 @@ func provisionGitHub(owner, repo, visibility, projectName string) (createdProjec
 		if output, createErr := exec.Command("gh", "repo", "create", remote, flag).CombinedOutput(); createErr != nil {
 			return createdProject{}, fmt.Errorf("create repository %s: %s", remote, strings.TrimSpace(string(output)))
 		}
+	}
+	if output, err := exec.Command("gh", "repo", "edit", remote, "--enable-issues", "--enable-wiki").CombinedOutput(); err != nil {
+		return createdProject{}, fmt.Errorf("enable repository features: %s", strings.TrimSpace(string(output)))
 	}
 	output, err := exec.Command("gh", "project", "create", "--owner", owner, "--title", projectName, "--format", "json").Output()
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +73,25 @@ func TestPendingWikiJournalAllowsRepairedReceipt(t *testing.T) {
 	comments = append(comments, github.Comment{Body: repaired})
 	if pendingWikiJournal(comments) {
 		t.Fatal("repaired wiki journal must not block completion")
+	}
+}
+
+func TestRequireEmptyBootstrapRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := requireEmptyBootstrapRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "existing"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireEmptyBootstrapRoot(root); err == nil {
+		t.Fatal("expected nonempty root refusal")
+	}
+}
+
+func TestContainsAndTitleCase(t *testing.T) {
+	if !contains([]string{"delivery", "core"}, "core") || contains([]string{"delivery"}, "ops") {
+		t.Fatal("configured area lookup is incorrect")
 	}
 }
 

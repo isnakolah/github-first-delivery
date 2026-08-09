@@ -5,9 +5,100 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 var files = map[string]string{
+	".github/workflows/gfd-writer.yml": `name: GFD Writer
+on:
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+concurrency:
+  group: gfd-writer-${{ github.repository_id }}
+  cancel-in-progress: false
+jobs:
+  writer:
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+    steps:
+      - uses: actions/checkout@v4
+        with: {ref: __GFD_DEFAULT_BRANCH__}
+      - uses: actions/setup-go@v6
+        with: {go-version: '1.26.4'}
+      - name: Install canonical GFD
+        run: go install github.com/isnakolah/github-first-delivery/cmd/gfd@main
+      - name: Writer activation boundary
+        env:
+          GITHUB_TOKEN: ${{ secrets.GFD_WRITER_TOKEN }}
+        run: |
+          test -n "$GITHUB_TOKEN" || { echo 'GFD_WRITER_TOKEN not configured; writer remains inactive.'; exit 0; }
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            gfd writer run --issue-number "${{ github.event.issue.number }}" --apply
+          else
+            gfd writer reconcile --apply
+          fi
+`,
+	".github/workflows/gfd-policy.yml": `name: GFD policy
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: __GFD_DEFAULT_BRANCH__
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with: {go-version: '1.26.4'}
+      - name: Install canonical GFD
+        run: go install github.com/isnakolah/github-first-delivery/cmd/gfd@main
+      - name: Validate PR metadata and live work state
+        env:
+          GITHUB_TOKEN: ${{ secrets.GFD_WRITER_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          test -n "$GITHUB_TOKEN" || { echo 'GFD_WRITER_TOKEN not configured; policy cannot verify Project lease.'; exit 1; }
+          gfd policy pr --pr "$PR_URL" --json
+`,
+	".github/workflows/ci.yml": `name: CI
+on:
+  pull_request:
+  push:
+    branches: [__GFD_DEFAULT_BRANCH__]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v6
+        with: {go-version: '1.26.4'}
+      - run: go test -race ./...
+      - run: go vet ./...
+      - run: go build ./cmd/gfd
+      - run: |
+          test -f plugins/codex/github-first-delivery/.codex-plugin/plugin.json
+          test -f plugins/claude/github-first-delivery/.claude-plugin/plugin.json
+          jq empty plugins/codex/github-first-delivery/hooks/hooks.json
+          jq empty plugins/claude/github-first-delivery/hooks/hooks.json
+          test -f templates/repository/.github/ISSUE_TEMPLATE/work.yml
+`,
 	".agent/rules/github-first-delivery.md": `# GitHub-first delivery
 
 Run ` + "`gfd context`" + ` before work. Select only Ready, unblocked, unleased leaf work. Claim before creating branch or editing. Native parent and blocker links are authority. Submit evidence before completion. Never create local task ledger or autonomous Epic.
@@ -97,10 +188,13 @@ body:
 `,
 }
 
-func Install(root, owner string, projectNumber int) error {
+func Install(root, owner string, projectNumber int, defaultBranch string) error {
+	if defaultBranch == "" {
+		return fmt.Errorf("default branch is required")
+	}
 	all := make(map[string]string, len(files)+1)
 	for path, body := range files {
-		all[path] = body
+		all[path] = strings.ReplaceAll(body, "__GFD_DEFAULT_BRANCH__", defaultBranch)
 	}
 	all[".github/ISSUE_TEMPLATE/config.yml"] = fmt.Sprintf(`blank_issues_enabled: false
 contact_links:
