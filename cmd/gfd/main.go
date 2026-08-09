@@ -1407,15 +1407,21 @@ func writerReconcileCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	output, err := ghOutput("issue", "list", "--repo", c.Owner+"/"+c.Repository, "--state", "all", "--limit", "100", "--json", "number")
+	output, err := ghOutput("api", "--paginate", "--slurp", "repos/"+c.Owner+"/"+c.Repository+"/issues?state=all&per_page=100")
 	if err != nil {
 		return err
 	}
-	var issues []struct {
+	var pages [][]struct {
 		Number int `json:"number"`
 	}
-	if err := json.Unmarshal(output, &issues); err != nil {
+	if err := json.Unmarshal(output, &pages); err != nil {
 		return err
+	}
+	issues := make([]struct {
+		Number int `json:"number"`
+	}, 0)
+	for _, page := range pages {
+		issues = append(issues, page...)
 	}
 	report := map[string]any{"issues_scanned": len(issues), "requests_receipted": 0, "leases_reclaimed": 0, "apply": *apply}
 	for _, issue := range issues {

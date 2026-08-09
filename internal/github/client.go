@@ -100,9 +100,18 @@ func (c *Client) CreateComment(ctx context.Context, owner, repo string, number i
 }
 
 func (c *Client) ListComments(ctx context.Context, owner, repo string, number int) ([]Comment, error) {
-	var result []Comment
-	err := c.Do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/issues/%d/comments?per_page=100", owner, repo, number), nil, &result)
-	return result, err
+	result := make([]Comment, 0, 100)
+	for page := 1; ; page++ {
+		var batch []Comment
+		path := fmt.Sprintf("/repos/%s/%s/issues/%d/comments?per_page=100&page=%d", owner, repo, number, page)
+		if err := c.Do(ctx, http.MethodGet, path, nil, &batch); err != nil {
+			return nil, err
+		}
+		result = append(result, batch...)
+		if len(batch) < 100 {
+			return result, nil
+		}
+	}
 }
 
 // SetIssueState changes only the GitHub Issue open/closed state. The Writer
