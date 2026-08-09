@@ -25,6 +25,7 @@ Read [operations guide](docs/operations.md), [source install and recovery](docs/
 go test ./...
 go vet ./...
 go build ./cmd/gfd
+scripts/check-plugins.sh
 ```
 
 Plugins live under `plugins/codex` and `plugins/claude`. Review and explicitly trust bundled hooks. Hooks guard common paths only; Writer, CI, and protected branches enforce policy.

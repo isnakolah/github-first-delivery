@@ -32,9 +32,10 @@ Before editing work, claim an accepted leaf and export its context:
 ```sh
 export GFD_LEASE_ISSUE=123
 export GFD_LEASE_HOLDER='provider/profile/session'
+export GFD_LEASE_BRANCH='123/short-description'
 ```
 
-Hooks block write paths without both variables. `GFD_BOOTSTRAP_ADMIN=1` permits only documented repository bootstrap administration; remove it immediately after that operation.
+Hooks block file writes and state-changing shell commands unless all three values match live GFD state; safe discovery and test commands remain allowed. `GFD_BOOTSTRAP_ADMIN=1` permits only documented repository bootstrap administration; remove it immediately after that operation.
 
 ## Upgrade and recovery
 
@@ -42,4 +43,4 @@ Pull source, rerun `go install`, then `gfd doctor`. Recreate local cache freely:
 
 ## Proof status
 
-macOS source install has local development evidence. Fresh macOS and Linux source-install, trusted-plugin, and hook-behavior proof remain release-Gate requirements.
+Local unit, vet, template, and plugin-hook checks exist. Fresh macOS and Linux source-install, trusted-plugin, disposable-repository Writer, and hook-behavior proof remain release-Gate requirements.
