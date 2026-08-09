@@ -795,6 +795,15 @@ func reconcileIssue(c model.Config, number int, apply bool) (int, int, error) {
 	if err != nil {
 		return receipted, 0, err
 	}
+	if apply {
+		if err := initializeProjectFields(c, number, state); err != nil {
+			return receipted, 0, err
+		}
+		state, err = loadLiveWork(c, number)
+		if err != nil {
+			return receipted, 0, err
+		}
+	}
 	expires, _ := time.Parse(time.RFC3339, state.Expiry)
 	next, reclaimed := writer.ReclaimExpired(writer.WorkState{Status: state.Status, Lease: writer.Lease{Holder: state.Holder, Expires: expires, Branch: state.Branch}}, time.Now())
 	if !reclaimed {
@@ -833,6 +842,10 @@ type liveWork struct {
 	Holder     string
 	Expiry     string
 	Branch     string
+	Kind       string
+	Area       string
+	Priority   string
+	Proof      string
 }
 
 type liveBlocker struct{ ID, State string }
@@ -1027,6 +1040,14 @@ projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes
 				state.Expiry = value.Text
 			case "Branch":
 				state.Branch = value.Text
+			case "Kind":
+				state.Kind = value.Name
+			case "Area":
+				state.Area = value.Name
+			case "Priority":
+				state.Priority = value.Name
+			case "Proof":
+				state.Proof = value.Name
 			}
 		}
 	}
@@ -1077,6 +1098,77 @@ func updateLiveWork(c model.Config, itemID string, state writer.WorkState) error
 		}
 		if output, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
 			return fmt.Errorf("update %s: %s", value.name, strings.TrimSpace(string(output)))
+		}
+	}
+	return nil
+}
+
+// initializeProjectFields fills only blank bootstrap fields. Existing values are
+// never overwritten; labels remain source for Kind and Area classification.
+func initializeProjectFields(c model.Config, number int, state liveWork) error {
+	output, err := exec.Command("gh", "issue", "view", fmt.Sprint(number), "--repo", c.Owner+"/"+c.Repository, "--json", "labels").Output()
+	if err != nil {
+		return err
+	}
+	var result struct {
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		return err
+	}
+	kind, area := "", ""
+	for _, label := range result.Labels {
+		if strings.HasPrefix(label.Name, "kind:") {
+			value := strings.TrimPrefix(label.Name, "kind:")
+			kind = strings.ToUpper(value[:1]) + value[1:]
+		}
+		if strings.HasPrefix(label.Name, "area:") {
+			value := strings.TrimPrefix(label.Name, "area:")
+			area = strings.ToUpper(value[:1]) + value[1:]
+		}
+	}
+	if kind == "" {
+		return errors.New("cannot initialize Project Kind without kind label")
+	}
+	if area == "" {
+		if output, err := exec.Command("gh", "issue", "edit", fmt.Sprint(number), "--repo", c.Owner+"/"+c.Repository, "--add-label", "area:stable").CombinedOutput(); err != nil {
+			return fmt.Errorf("initialize area label: %s", strings.TrimSpace(string(output)))
+		}
+		area = "Stable"
+	}
+	values := map[string]string{}
+	if state.Status == "" {
+		values["Status"] = "Backlog"
+	}
+	if state.Kind == "" {
+		values["Kind"] = kind
+	}
+	if state.Area == "" {
+		values["Area"] = area
+	}
+	if state.Priority == "" {
+		values["Priority"] = "P2"
+	}
+	if state.Proof == "" {
+		values["Proof"] = "Not started"
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	fields, err := configuredProjectFields(c)
+	if err != nil {
+		return err
+	}
+	for name, value := range values {
+		field, ok := fields[name]
+		if !ok || field.Options[value] == "" {
+			return fmt.Errorf("configured Project lacks %s option %q", name, value)
+		}
+		args := []string{"project", "item-edit", "--id", state.ItemID, "--project-id", c.Project.ID, "--field-id", field.ID, "--single-select-option-id", field.Options[value]}
+		if output, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("initialize %s: %s", name, strings.TrimSpace(string(output)))
 		}
 	}
 	return nil
