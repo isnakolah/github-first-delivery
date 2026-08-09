@@ -89,15 +89,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v6
         with: {go-version: '1.26.4'}
-      - run: go test -race ./...
-      - run: go vet ./...
-      - run: go build ./cmd/gfd
-      - run: |
-          test -f plugins/codex/github-first-delivery/.codex-plugin/plugin.json
-          test -f plugins/claude/github-first-delivery/.claude-plugin/plugin.json
-          jq empty plugins/codex/github-first-delivery/hooks/hooks.json
-          jq empty plugins/claude/github-first-delivery/hooks/hooks.json
-          test -f templates/repository/.github/ISSUE_TEMPLATE/work.yml
+      - name: Test Go source when present
+        run: |
+          if [ -f go.mod ]; then
+            go test -race ./...
+            go vet ./...
+          else
+            echo 'No Go module yet; bootstrap policy files only.'
+          fi
 `,
 	".agent/rules/github-first-delivery.md": `# GitHub-first delivery
 

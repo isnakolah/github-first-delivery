@@ -27,6 +27,10 @@ func TestInstallWritesCompleteDynamicContract(t *testing.T) {
 	if err != nil || !strings.Contains(string(writer), "ref: trunk") || !strings.Contains(string(writer), "github.com/isnakolah/github-first-delivery/cmd/gfd@main") {
 		t.Fatalf("writer default branch content=%q err=%v", writer, err)
 	}
+	ci, err := os.ReadFile(filepath.Join(root, ".github/workflows/ci.yml"))
+	if err != nil || strings.Contains(string(ci), "./cmd/gfd") || strings.Contains(string(ci), "plugins/codex") || !strings.Contains(string(ci), "if [ -f go.mod ]") {
+		t.Fatalf("target CI must not require GFD source layout: content=%q err=%v", ci, err)
+	}
 	config, err := os.ReadFile(filepath.Join(root, ".github/ISSUE_TEMPLATE/config.yml"))
 	if err != nil || !strings.Contains(string(config), "https://github.com/users/octo/projects/7") {
 		t.Fatalf("config=%q err=%v", config, err)
