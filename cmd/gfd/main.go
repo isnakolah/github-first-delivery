@@ -812,6 +812,7 @@ func writerCommand(args []string) error {
 	if *apply {
 		for _, item := range pending {
 			receipt := applyWriterRequest(c, *number, item.Request, comments)
+			receipt = publishEvidenceJournal(c, *number, item.Request, receipt)
 			rejected = append(rejected, receipt)
 		}
 		for _, receipt := range rejected {
@@ -875,7 +876,8 @@ func reconcileIssue(c model.Config, number int, apply bool) (int, int, error) {
 	receipted := 0
 	if apply {
 		for _, item := range pending {
-			rejected = append(rejected, applyWriterRequest(c, number, item.Request, comments))
+			receipt := applyWriterRequest(c, number, item.Request, comments)
+			rejected = append(rejected, publishEvidenceJournal(c, number, item.Request, receipt))
 		}
 		for _, receipt := range rejected {
 			body, err := writer.RejectionComment(receipt)
@@ -887,6 +889,13 @@ func reconcileIssue(c model.Config, number int, apply bool) (int, int, error) {
 			}
 			receipted++
 		}
+	}
+	if apply {
+		repaired, err := retryPendingWikiJournals(c, number, comments)
+		if err != nil {
+			return receipted, 0, err
+		}
+		receipted += repaired
 	}
 	state, err := loadLiveWork(c, number)
 	if err != nil {
@@ -999,8 +1008,13 @@ func applyWriterRequest(c model.Config, number int, request writer.Request, comm
 			}
 		}
 	}
-	if request.Action == "status" && request.Status == "Done" && !acceptedEvidence(comments) {
-		return rejectedReceipt(request, errors.New("Done requires a prior accepted evidence receipt"))
+	if request.Action == "status" && request.Status == "Done" {
+		if !acceptedEvidence(comments) {
+			return rejectedReceipt(request, errors.New("Done requires a prior accepted evidence receipt"))
+		}
+		if c.WikiMode == "journal" && pendingWikiJournal(comments) {
+			return rejectedReceipt(request, errors.New("Done requires generated Wiki journal to be synchronized"))
+		}
 	}
 	if request.Action == "pr.link" {
 		if err := validateReviewPR(request.PR); err != nil {
@@ -1045,6 +1059,60 @@ func acceptedEvidence(comments []github.Comment) bool {
 		bodies = append(bodies, comment.Body)
 	}
 	return writer.HasAcceptedEvidence(bodies)
+}
+
+func pendingWikiJournal(comments []github.Comment) bool {
+	for _, comment := range comments {
+		receipt, err := writer.ParseReceipt(comment.Body)
+		if err == nil && receipt.Result == "accepted" && receipt.Evidence != nil && strings.Contains(receipt.Detail, "Wiki journal pending") {
+			return true
+		}
+	}
+	return false
+}
+
+func publishEvidenceJournal(c model.Config, number int, request writer.Request, receipt writer.Receipt) writer.Receipt {
+	if c.WikiMode != "journal" || receipt.Result != "accepted" || receipt.Evidence == nil {
+		return receipt
+	}
+	entry := journal.Entry{RequestID: receipt.RequestID, Date: receipt.At.UTC().Format("2006-01-02"), Issue: fmt.Sprintf("#%d", number), PR: request.PR, Outcome: receipt.Detail, Proof: receipt.Evidence.Criteria, Boundary: receipt.Evidence.Boundary, NextBlocker: "None"}
+	published, err := journal.PublishWiki(context.Background(), c.Owner, c.Repository, github.NewClient().Token, entry)
+	if err != nil {
+		receipt.Detail += "; Wiki journal pending: " + strings.ReplaceAll(err.Error(), "\n", " ")
+		return receipt
+	}
+	if published {
+		receipt.Detail += "; Wiki journal appended"
+	}
+	return receipt
+}
+
+func retryPendingWikiJournals(c model.Config, number int, comments []github.Comment) (int, error) {
+	if c.WikiMode != "journal" {
+		return 0, nil
+	}
+	client := github.NewClient()
+	repaired := 0
+	for _, comment := range comments {
+		receipt, err := writer.ParseReceipt(comment.Body)
+		if err != nil || receipt.Result != "accepted" || receipt.Evidence == nil || !strings.Contains(receipt.Detail, "Wiki journal pending") {
+			continue
+		}
+		entry := journal.Entry{RequestID: receipt.RequestID, Date: receipt.At.UTC().Format("2006-01-02"), Issue: fmt.Sprintf("#%d", number), Outcome: "evidence journal repair", Proof: receipt.Evidence.Criteria, Boundary: receipt.Evidence.Boundary, NextBlocker: "None"}
+		if _, err := journal.PublishWiki(context.Background(), c.Owner, c.Repository, client.Token, entry); err != nil {
+			continue
+		}
+		repairID := "wiki-retry-" + receipt.RequestID
+		body, err := writer.RenderReceipt(writer.Receipt{RequestID: repairID, Result: "accepted", Detail: "generated Wiki journal repaired for evidence request " + receipt.RequestID, At: time.Now().UTC()})
+		if err != nil {
+			return repaired, err
+		}
+		if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, number, body); err != nil {
+			return repaired, err
+		}
+		repaired++
+	}
+	return repaired, nil
 }
 
 func validateReviewPR(pr string) error {
