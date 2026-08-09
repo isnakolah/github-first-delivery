@@ -60,3 +60,11 @@ func TestApplyLifecycleInitialBacklogStatus(t *testing.T) {
 		t.Fatal("expected backwards status rejection")
 	}
 }
+
+func TestReclaimExpiredPreservesBranch(t *testing.T) {
+	now := time.Date(2026, 8, 9, 3, 0, 0, 0, time.UTC)
+	next, reclaimed := ReclaimExpired(WorkState{Status: "In progress", Lease: Lease{Holder: "a", Expires: now, Branch: "011/work"}}, now)
+	if !reclaimed || next.Status != "Ready" || next.Lease.Holder != "" || next.Lease.Branch != "011/work" {
+		t.Fatalf("next=%+v reclaimed=%t", next, reclaimed)
+	}
+}

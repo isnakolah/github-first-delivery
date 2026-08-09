@@ -651,8 +651,14 @@ func configureCommand(args []string) error {
 }
 
 func writerCommand(args []string) error {
-	if len(args) == 0 || args[0] != "run" {
-		return errors.New("usage: gfd writer run --issue-number N [--apply]")
+	if len(args) == 0 {
+		return errors.New("usage: gfd writer {run|reconcile}")
+	}
+	if args[0] == "reconcile" {
+		return writerReconcileCommand(args[1:])
+	}
+	if args[0] != "run" {
+		return errors.New("usage: gfd writer {run|reconcile}")
 	}
 	fs := flag.NewFlagSet("writer run", flag.ContinueOnError)
 	number := fs.Int("issue-number", 0, "issue number")
@@ -696,6 +702,93 @@ func writerCommand(args []string) error {
 		ids = append(ids, item.Request.ID)
 	}
 	return printValue(map[string]any{"issue_number": *number, "pending_request_ids": ids, "receipts_applied": receiptsApplied, "apply": *apply, "note": "lifecycle requests require fresh fingerprint and configured Project membership"}, *asJSON)
+}
+
+func writerReconcileCommand(args []string) error {
+	fs := flag.NewFlagSet("writer reconcile", flag.ContinueOnError)
+	apply := applyFlag(fs)
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	output, err := exec.Command("gh", "issue", "list", "--repo", c.Owner+"/"+c.Repository, "--state", "open", "--limit", "100", "--json", "number").Output()
+	if err != nil {
+		return err
+	}
+	var issues []struct {
+		Number int `json:"number"`
+	}
+	if err := json.Unmarshal(output, &issues); err != nil {
+		return err
+	}
+	report := map[string]any{"issues_scanned": len(issues), "requests_receipted": 0, "leases_reclaimed": 0, "apply": *apply}
+	for _, issue := range issues {
+		receipted, reclaimed, err := reconcileIssue(c, issue.Number, *apply)
+		if err != nil {
+			return fmt.Errorf("reconcile Issue #%d: %w", issue.Number, err)
+		}
+		report["requests_receipted"] = report["requests_receipted"].(int) + receipted
+		report["leases_reclaimed"] = report["leases_reclaimed"].(int) + reclaimed
+	}
+	return printValue(report, *asJSON)
+}
+
+func reconcileIssue(c model.Config, number int, apply bool) (int, int, error) {
+	client := github.NewClient()
+	comments, err := client.ListComments(context.Background(), c.Owner, c.Repository, number)
+	if err != nil {
+		return 0, 0, err
+	}
+	pending, rejected := writer.Pending(comments)
+	receipted := 0
+	if apply {
+		for _, item := range pending {
+			rejected = append(rejected, applyWriterRequest(c, number, item.Request))
+		}
+		for _, receipt := range rejected {
+			body, err := writer.RejectionComment(receipt)
+			if err != nil {
+				return 0, 0, err
+			}
+			if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, number, body); err != nil {
+				return 0, 0, err
+			}
+			receipted++
+		}
+	}
+	state, err := loadLiveWork(c, number)
+	if err != nil {
+		return receipted, 0, err
+	}
+	expires, _ := time.Parse(time.RFC3339, state.Expiry)
+	next, reclaimed := writer.ReclaimExpired(writer.WorkState{Status: state.Status, Lease: writer.Lease{Holder: state.Holder, Expires: expires, Branch: state.Branch}}, time.Now())
+	if !reclaimed {
+		return receipted, 0, nil
+	}
+	if !apply {
+		return receipted, 1, nil
+	}
+	if err := updateLiveWork(c, state.ItemID, next); err != nil {
+		return receipted, 0, err
+	}
+	requestID := fmt.Sprintf("lease-expiry-%s-%s", state.IssueID, state.Expiry)
+	for _, comment := range comments {
+		if strings.Contains(comment.Body, "request="+requestID) {
+			return receipted, 1, nil
+		}
+	}
+	body, err := writer.RenderReceipt(writer.Receipt{RequestID: requestID, Result: "accepted", Detail: "expired lease cleared; Issue returned to Ready", At: time.Now().UTC()})
+	if err != nil {
+		return receipted, 0, err
+	}
+	if _, err := client.CreateComment(context.Background(), c.Owner, c.Repository, number, body); err != nil {
+		return receipted, 0, err
+	}
+	return receipted + 1, 1, nil
 }
 
 type liveWork struct {
