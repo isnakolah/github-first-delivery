@@ -12,4 +12,6 @@ Use `gfd context --issue-number N --json` to obtain Issue node ID and current st
 
 Evidence is a Writer request, never a free-form completion comment. `gfd evidence submit` requires `--pr`, final SHA, CI URL, exact commands, environments, criteria result, artifacts (`None: reason` allowed), documentation impact, residual risks (`None` allowed), and proof boundary. Valid evidence moves only In review work to Evidence pending and is preserved in Writer receipt JSON.
 
+`gfd pr link --issue-number N --issue-id ID --fingerprint SHA --pr URL --apply` records an open canonical PR request and moves only In progress work to In review. Evidence re-reads its PR and requires merged state plus exact merge-commit SHA match before any evidence state mutation.
+
 Wiki journal is generated from receipts and is noncanonical. If Wiki write fails, Writer leaves work at Evidence pending and reconciliation retries.

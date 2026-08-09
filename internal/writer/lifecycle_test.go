@@ -81,3 +81,10 @@ func TestApplyLifecycleEvidenceRequiresCompletePayload(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestApplyLifecyclePRLinkMovesReview(t *testing.T) {
+	state, err := ApplyLifecycle(WorkState{Status: "In progress"}, Request{Action: "pr.link", PR: "https://example.test/pr/1"}, time.Now())
+	if err != nil || state.Status != "In review" {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+}
