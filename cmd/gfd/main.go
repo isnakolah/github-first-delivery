@@ -100,6 +100,12 @@ func initCommand(args []string) error {
 	if _, err := os.Stat(configPath); err == nil {
 		return fmt.Errorf("%s already exists; use adopt for existing repositories", configPath)
 	}
+	projectInfo, err := provisionGitHub(*owner, *repo, *visibility, *project)
+	if err != nil {
+		return err
+	}
+	c.Project.ID = projectInfo.ID
+	c.Project.Number = projectInfo.Number
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return err
 	}
@@ -110,8 +116,38 @@ func initCommand(args []string) error {
 	if err := os.WriteFile(configPath, raw, 0644); err != nil {
 		return err
 	}
-	fmt.Printf("wrote %s; provision GitHub Project through gfd writer bootstrap\n", configPath)
+	fmt.Printf("provisioned %s/%s and Project #%d; wrote %s\n", *owner, *repo, projectInfo.Number, configPath)
 	return nil
+}
+
+type createdProject struct {
+	ID     string `json:"id"`
+	Number int    `json:"number"`
+}
+
+func provisionGitHub(owner, repo, visibility, projectName string) (createdProject, error) {
+	remote := owner + "/" + repo
+	if err := exec.Command("gh", "repo", "view", remote).Run(); err != nil {
+		flag := "--public"
+		if visibility == "private" {
+			flag = "--private"
+		}
+		if output, createErr := exec.Command("gh", "repo", "create", remote, flag).CombinedOutput(); createErr != nil {
+			return createdProject{}, fmt.Errorf("create repository %s: %s", remote, strings.TrimSpace(string(output)))
+		}
+	}
+	output, err := exec.Command("gh", "project", "create", "--owner", owner, "--title", projectName, "--format", "json").Output()
+	if err != nil {
+		return createdProject{}, fmt.Errorf("create Project: %w", err)
+	}
+	var project createdProject
+	if err := json.Unmarshal(output, &project); err != nil {
+		return createdProject{}, err
+	}
+	if project.ID == "" || project.Number == 0 {
+		return createdProject{}, errors.New("GitHub returned incomplete Project identity")
+	}
+	return project, nil
 }
 func split(s string) []string {
 	var out []string
