@@ -1027,7 +1027,11 @@ func fingerprintLiveWork(state liveWork) (string, error) {
 }
 
 func liveWorkFingerprint(state liveWork) writer.Fingerprint {
-	fingerprint := writer.Fingerprint{IssueID: state.IssueID, IssueState: state.IssueState, UpdatedAt: state.UpdatedAt, ParentID: state.ParentID, Project: map[string]string{"status": state.Status, "lease_holder": state.Holder, "lease_expires": state.Expiry, "branch": state.Branch}}
+	// GitHub updates Issue.updatedAt when gfd posts its durable request comment.
+	// Including that value makes every request stale before the Writer can read
+	// it. The fingerprint therefore covers authoritative graph and Project state,
+	// while request parsing separately rejects edited request comments.
+	fingerprint := writer.Fingerprint{IssueID: state.IssueID, IssueState: state.IssueState, ParentID: state.ParentID, Project: map[string]string{"status": state.Status, "lease_holder": state.Holder, "lease_expires": state.Expiry, "branch": state.Branch}}
 	for _, blocker := range state.Blockers {
 		fingerprint.DependencyIDs = append(fingerprint.DependencyIDs, blocker.ID)
 	}
