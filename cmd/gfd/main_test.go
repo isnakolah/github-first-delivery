@@ -125,9 +125,22 @@ func TestStandardProjectViews(t *testing.T) {
 	}
 }
 
+func TestIssueNumberFromURL(t *testing.T) {
+	number, err := issueNumberFromURL("https://github.com/octo/example/issues/42")
+	if err != nil || number != 42 {
+		t.Fatalf("number=%d err=%v", number, err)
+	}
+	if _, err := issueNumberFromURL("not an issue URL"); err == nil {
+		t.Fatal("expected malformed URL rejection")
+	}
+}
+
 func TestContainsAndTitleCase(t *testing.T) {
 	if !contains([]string{"delivery", "core"}, "core") || contains([]string{"delivery"}, "ops") {
 		t.Fatal("configured area lookup is incorrect")
+	}
+	if got := titleCase("story"); got != "Story" {
+		t.Fatalf("titleCase=%q", got)
 	}
 }
 
