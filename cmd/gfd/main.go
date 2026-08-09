@@ -104,6 +104,9 @@ func initCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := provisionProjectContract(*owner, *repo, projectInfo.Number); err != nil {
+		return err
+	}
 	c.Project.ID = projectInfo.ID
 	c.Project.Number = projectInfo.Number
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
@@ -148,6 +151,32 @@ func provisionGitHub(owner, repo, visibility, projectName string) (createdProjec
 		return createdProject{}, errors.New("GitHub returned incomplete Project identity")
 	}
 	return project, nil
+}
+
+func provisionProjectContract(owner, repo string, projectNumber int) error {
+	labels := []string{"kind:epic", "kind:contract", "kind:story", "kind:task", "kind:defect", "kind:gate", "kind:decision"}
+	for _, label := range labels {
+		if output, err := exec.Command("gh", "label", "create", label, "--color", "1D76DB", "--force", "--repo", owner+"/"+repo).CombinedOutput(); err != nil {
+			return fmt.Errorf("create label %s: %s", label, strings.TrimSpace(string(output)))
+		}
+	}
+	fields := []struct{ name, kind, options string }{
+		{"Kind", "SINGLE_SELECT", "Epic,Contract,Story,Task,Defect,Gate,Decision"},
+		{"Area", "SINGLE_SELECT", "Stable"},
+		{"Priority", "SINGLE_SELECT", "P0,P1,P2,P3"},
+		{"Proof", "SINGLE_SELECT", "Not started,Local verified,CI verified,Target environment pending,External/provider pending,Complete"},
+		{"Lease holder", "TEXT", ""}, {"Lease expires", "TEXT", ""}, {"Branch", "TEXT", ""}, {"State fingerprint", "TEXT", ""},
+	}
+	for _, field := range fields {
+		args := []string{"project", "field-create", fmt.Sprint(projectNumber), "--owner", owner, "--name", field.name, "--data-type", field.kind}
+		if field.options != "" {
+			args = append(args, "--single-select-options", field.options)
+		}
+		if output, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
+			return fmt.Errorf("create Project field %s: %s", field.name, strings.TrimSpace(string(output)))
+		}
+	}
+	return nil
 }
 func split(s string) []string {
 	var out []string
