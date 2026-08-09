@@ -20,6 +20,21 @@ func ApplyLifecycle(current WorkState, request Request, now time.Time) (WorkStat
 		current.Status = "Backlog"
 	}
 	switch request.Action {
+	case "evidence.submit":
+		if request.Evidence == nil {
+			return WorkState{}, fmt.Errorf("evidence request requires evidence payload")
+		}
+		if err := request.Evidence.Validate(); err != nil {
+			return WorkState{}, err
+		}
+		if request.PR == "" {
+			return WorkState{}, fmt.Errorf("evidence request requires pull request URL")
+		}
+		if err := RequireTransition(current.Status, "Evidence pending"); err != nil {
+			return WorkState{}, err
+		}
+		current.Status = "Evidence pending"
+		return current, nil
 	case "status":
 		if request.Status == "" {
 			return WorkState{}, fmt.Errorf("status request requires status")

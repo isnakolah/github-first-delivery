@@ -590,6 +590,19 @@ func submitRequest(action string, args []string, evidence *writer.Evidence) erro
 	lease := fs.String("lease-expires", "", "RFC3339 expiry")
 	branch := fs.String("branch", "", "NNN/short-description branch")
 	status := fs.String("status", "", "requested Project Status")
+	pr := fs.String("pr", "", "pull request URL")
+	var finalSHA, ciURL, commands, environments, criteria, artifacts, documentation, risks, boundary *string
+	if evidence != nil {
+		finalSHA = fs.String("final-sha", "", "final merged commit SHA")
+		ciURL = fs.String("ci-url", "", "CI run URL")
+		commands = fs.String("commands", "", "exact verification commands")
+		environments = fs.String("environments", "", "verified environments")
+		criteria = fs.String("criteria", "", "acceptance-criteria result")
+		artifacts = fs.String("artifacts", "", "artifact, screenshot, or log URLs; None: reason")
+		documentation = fs.String("documentation", "", "documentation changes; None: reason")
+		risks = fs.String("risks", "", "known residual risks; None")
+		boundary = fs.String("boundary", "", "local|CI|target host|provider|staging|production|release")
+	}
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -599,11 +612,20 @@ func submitRequest(action string, args []string, evidence *writer.Evidence) erro
 	if *number < 1 || *id == "" || *fingerprint == "" {
 		return errors.New("--issue-number, --issue-id, and --fingerprint are required")
 	}
+	if evidence != nil {
+		*evidence = writer.Evidence{FinalSHA: *finalSHA, CIURL: *ciURL, Commands: *commands, Environments: *environments, Criteria: *criteria, Artifacts: *artifacts, Documentation: *documentation, Risks: *risks, Boundary: *boundary}
+		if err := evidence.Validate(); err != nil {
+			return err
+		}
+		if *pr == "" {
+			return errors.New("evidence submit requires --pr")
+		}
+	}
 	c, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	r := writer.Request{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Action: action, IssueID: *id, Actor: *actor, ExpectedFingerprint: *fingerprint, LeaseExpiresAt: *lease, Branch: *branch, Status: *status, Evidence: evidence}
+	r := writer.Request{ID: fmt.Sprintf("%d", time.Now().UnixNano()), Action: action, IssueID: *id, Actor: *actor, ExpectedFingerprint: *fingerprint, LeaseExpiresAt: *lease, Branch: *branch, Status: *status, PR: *pr, Evidence: evidence}
 	body, err := writer.RenderRequest(r)
 	if err != nil {
 		return err
@@ -836,7 +858,12 @@ func applyWriterRequest(c model.Config, number int, request writer.Request) writ
 	if err := updateLiveWork(c, state.ItemID, next); err != nil {
 		return rejectedReceipt(request, err)
 	}
-	return writer.Receipt{RequestID: request.ID, Fingerprint: actual, Result: "accepted", Detail: "lifecycle state changed to " + next.Status, At: time.Now().UTC()}
+	receipt := writer.Receipt{RequestID: request.ID, Fingerprint: actual, Result: "accepted", Detail: "lifecycle state changed to " + next.Status, At: time.Now().UTC()}
+	if request.Action == "evidence.submit" {
+		receipt.Detail = "evidence recorded; lifecycle state changed to Evidence pending"
+		receipt.Evidence = request.Evidence
+	}
+	return receipt
 }
 
 func fingerprintLiveWork(state liveWork) (string, error) {

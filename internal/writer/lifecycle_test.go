@@ -68,3 +68,16 @@ func TestReclaimExpiredPreservesBranch(t *testing.T) {
 		t.Fatalf("next=%+v reclaimed=%t", next, reclaimed)
 	}
 }
+
+func TestApplyLifecycleEvidenceRequiresCompletePayload(t *testing.T) {
+	now := time.Date(2026, 8, 9, 3, 0, 0, 0, time.UTC)
+	evidence := &Evidence{FinalSHA: "sha", CIURL: "ci", Commands: "go test", Environments: "CI", Criteria: "pass", Artifacts: "none", Documentation: "none", Risks: "none", Boundary: "CI"}
+	state, err := ApplyLifecycle(WorkState{Status: "In review"}, Request{Action: "evidence.submit", PR: "https://example.test/pr/1", Evidence: evidence}, now)
+	if err != nil || state.Status != "Evidence pending" {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+	_, err = ApplyLifecycle(WorkState{Status: "In review"}, Request{Action: "evidence.submit", Evidence: evidence}, now)
+	if err == nil || !strings.Contains(err.Error(), "pull request") {
+		t.Fatalf("err=%v", err)
+	}
+}
