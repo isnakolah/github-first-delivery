@@ -68,10 +68,79 @@ func run(args []string) error {
 	case "pr":
 		return prCommand(args[1:])
 	case "policy":
-		return fmt.Errorf("policy is reserved; implementation tracked through GitHub Project")
+		return policyCommand(args[1:])
 	default:
 		return usage()
 	}
+}
+
+func policyCommand(args []string) error {
+	if len(args) == 0 || args[0] != "pr" {
+		return errors.New("usage: gfd policy pr --pr URL [--json]")
+	}
+	fs := flag.NewFlagSet("policy pr", flag.ContinueOnError)
+	pr := fs.String("pr", "", "pull request URL")
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if *pr == "" {
+		return errors.New("policy pr requires --pr")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	output, err := ghOutput("pr", "view", *pr, "--repo", c.Owner+"/"+c.Repository, "--json", "url,headRefName,body")
+	if err != nil {
+		return err
+	}
+	var pull struct {
+		URL         string `json:"url"`
+		HeadRefName string `json:"headRefName"`
+		Body        string `json:"body"`
+	}
+	if err := json.Unmarshal(output, &pull); err != nil {
+		return err
+	}
+	issues, err := policycheck.ReferencedIssues(pull.Body)
+	if err != nil {
+		return err
+	}
+	state, err := loadLiveWork(c, issues[0])
+	if err != nil {
+		return err
+	}
+	if err := validatePRWork(pull.HeadRefName, pull.Body, state, time.Now()); err != nil {
+		return err
+	}
+	report := map[string]any{"valid": true, "pr": pull.URL, "issue_number": issues[0], "branch": pull.HeadRefName}
+	return printValue(report, *asJSON)
+}
+
+func validatePRWork(branch, body string, state liveWork, now time.Time) error {
+	issues, err := policycheck.ReferencedIssues(body)
+	if err != nil {
+		return err
+	}
+	if !strings.HasPrefix(branch, fmt.Sprintf("%03d/", issues[0])) {
+		return fmt.Errorf("PR branch %q does not map to referenced Issue #%d", branch, issues[0])
+	}
+	blockersResolved := true
+	for _, blocker := range state.Blockers {
+		if blocker.State != "CLOSED" {
+			blockersResolved = false
+		}
+	}
+	expires, err := time.Parse(time.RFC3339, state.Expiry)
+	hasLease := err == nil && state.Holder != "" && state.Branch == branch && expires.After(now.UTC())
+	if state.ParentID == "" {
+		return errors.New("PR Issue has no native parent")
+	}
+	if err := model.ValidateWorkContract(state.Body); err != nil {
+		return fmt.Errorf("PR Issue contract invalid: %w", err)
+	}
+	return policycheck.ValidatePR(branch, body, hasLease, blockersResolved)
 }
 
 func prCommand(args []string) error {
@@ -1578,6 +1647,7 @@ func hasWriterReceipt(comments []github.Comment) bool {
 type liveWork struct {
 	IssueID    string
 	IssueState string
+	Body       string
 	UpdatedAt  string
 	ParentID   string
 	Blockers   []liveBlocker
@@ -1821,6 +1891,7 @@ projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes
 				Issue struct {
 					ID        string `json:"id"`
 					State     string `json:"state"`
+					Body      string `json:"body"`
 					UpdatedAt string `json:"updatedAt"`
 					Parent    *struct {
 						ID string `json:"id"`
