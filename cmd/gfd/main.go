@@ -58,11 +58,51 @@ func run(args []string) error {
 		return writerCommand(args[1:])
 	case "adopt":
 		return adoptCommand(args[1:])
-	case "policy", "issue", "pr":
+	case "issue":
+		return issueCommand(args[1:])
+	case "policy", "pr":
 		return fmt.Errorf("%s is reserved; implementation tracked through GitHub Project", args[0])
 	default:
 		return usage()
 	}
+}
+
+func issueCommand(args []string) error {
+	if len(args) == 0 || args[0] != "create" {
+		return errors.New("usage: gfd issue create --title TITLE --kind KIND --body-file FILE --apply")
+	}
+	fs := flag.NewFlagSet("issue create", flag.ContinueOnError)
+	title := fs.String("title", "", "Issue title")
+	kind := fs.String("kind", "", "epic|contract|story|task|defect|gate|decision")
+	bodyFile := fs.String("body-file", "", "contract Markdown file")
+	apply := applyFlag(fs)
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if !*apply {
+		return errors.New("issue creation requires --apply")
+	}
+	if *title == "" || *bodyFile == "" {
+		return errors.New("--title and --body-file are required")
+	}
+	allowed := map[string]bool{"epic": true, "contract": true, "story": true, "task": true, "defect": true, "gate": true, "decision": true}
+	if !allowed[*kind] {
+		return errors.New("invalid --kind")
+	}
+	body, err := os.ReadFile(*bodyFile)
+	if err != nil {
+		return err
+	}
+	if *kind != "epic" && model.ValidateWorkContract(string(body)) != nil {
+		return errors.New("work Issue body does not satisfy work:v1 contract")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("gh", "issue", "create", "--repo", c.Owner+"/"+c.Repository, "--title", *title, "--label", "kind:"+*kind, "--body-file", *bodyFile)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
 }
 
 func adoptCommand(args []string) error {
