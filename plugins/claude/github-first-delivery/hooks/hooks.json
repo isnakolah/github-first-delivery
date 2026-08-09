@@ -1,6 +1,7 @@
 {
   "hooks": {
-    "SessionStart": [{"command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-context"}],
-    "PreToolUse": [{"matcher": "Edit|Write", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/pre-write-guard"}]
+    "SessionStart": [{"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-context"}]}],
+    "PreToolUse": [{"matcher": "Bash|Edit|Write", "hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/pre-write-guard"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "${CLAUDE_PLUGIN_ROOT}/scripts/session-context --stop"}]}]
   }
 }

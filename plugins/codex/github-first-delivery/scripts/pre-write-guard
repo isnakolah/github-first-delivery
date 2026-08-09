@@ -1,15 +1,39 @@
 #!/bin/sh
 set -eu
+
+input=$(mktemp "${TMPDIR:-/tmp}/gfd-hook.XXXXXX")
+trap 'rm -f "$input"' EXIT HUP INT TERM
+cat >"$input"
+tool=$(jq -r '.tool_name // ""' <"$input")
+command=$(jq -r '.tool_input.command // ""' <"$input")
+
+if [ "$tool" = "Bash" ]; then
+  case "$command" in
+    *"git commit"*|*"git push"*|*"git merge"*|*"git rebase"*|*"git reset"*|*"git checkout"*|*"git switch"*|*"gh issue create"*|*"gh issue edit"*|*"gh issue close"*|*"gh pr create"*|*"gh pr edit"*|*"gh pr merge"*|*"gh project create"*|*"gh project edit"*|*"gh project field-"*|*"gh repo create"*|*"gh repo edit"*|*"gh secret set"*|*"gh api -X POST"*|*"gh api --method POST"*|*" >"*|*" >>"*|*" tee "*|"rm "*|"mv "*|"cp "*|"mkdir "*|"touch "*) ;;
+    *) exit 0 ;;
+  esac
+fi
+
 if [ "${GFD_BOOTSTRAP_ADMIN:-}" = "1" ]; then
-  printf '%s\n' 'gfd bootstrap administration mode: write allowed'
   exit 0
 fi
 if ! command -v gfd >/dev/null 2>&1; then
-	printf '%s\n' 'gfd missing; edit denied outside documented bootstrap administration' >&2
-	exit 2
-fi
-if [ -z "${GFD_LEASE_ISSUE:-}" ] || [ -z "${GFD_LEASE_HOLDER:-}" ]; then
-  printf '%s\n' 'gfd active lease context missing; edit denied' >&2
+  printf '%s\n' 'gfd missing; state-changing operation denied outside documented bootstrap administration' >&2
   exit 2
 fi
-gfd context --json >/dev/null
+if [ -z "${GFD_LEASE_ISSUE:-}" ] || [ -z "${GFD_LEASE_HOLDER:-}" ] || [ -z "${GFD_LEASE_BRANCH:-}" ]; then
+  printf '%s\n' 'gfd active lease issue, holder, or branch context missing; operation denied' >&2
+  exit 2
+fi
+context=$(gfd context --issue-number "$GFD_LEASE_ISSUE" --json) || {
+  printf '%s\n' 'gfd could not verify active lease; operation denied' >&2
+  exit 2
+}
+holder=$(printf '%s' "$context" | jq -r '.lease_holder // ""')
+branch=$(printf '%s' "$context" | jq -r '.branch // ""')
+status=$(printf '%s' "$context" | jq -r '.status // ""')
+case "$status" in "Claimed"|"In progress"|"In review"|"Evidence pending") ;; *) printf '%s\n' 'gfd lease not in active state; operation denied' >&2; exit 2 ;; esac
+if [ "$holder" != "$GFD_LEASE_HOLDER" ] || [ "$branch" != "$GFD_LEASE_BRANCH" ]; then
+  printf '%s\n' 'gfd live lease does not match session lease context; operation denied' >&2
+  exit 2
+fi

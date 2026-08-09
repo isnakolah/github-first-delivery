@@ -1,7 +1,7 @@
 {
   "hooks": {
-    "SessionStart": [{"command": "${CODEX_PLUGIN_ROOT}/scripts/session-context"}],
-    "PreToolUse": [{"matcher": "Edit|Write|apply_patch", "command": "${CODEX_PLUGIN_ROOT}/scripts/pre-write-guard"}],
-    "Stop": [{"command": "${CODEX_PLUGIN_ROOT}/scripts/session-context --stop"}]
+    "SessionStart": [{"hooks": [{"type": "command", "command": "${CODEX_PLUGIN_ROOT}/scripts/session-context"}]}],
+    "PreToolUse": [{"matcher": "Bash|apply_patch", "hooks": [{"type": "command", "command": "${CODEX_PLUGIN_ROOT}/scripts/pre-write-guard"}]}],
+    "Stop": [{"hooks": [{"type": "command", "command": "${CODEX_PLUGIN_ROOT}/scripts/session-context --stop"}]}]
   }
 }
