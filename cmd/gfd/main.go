@@ -302,11 +302,13 @@ func initCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := provisionProjectContract(*owner, *repo, projectInfo.Number); err != nil {
+	fieldIDs, err := provisionProjectContract(*owner, *repo, projectInfo.Number, c.Areas)
+	if err != nil {
 		return err
 	}
 	c.Project.ID = projectInfo.ID
 	c.Project.Number = projectInfo.Number
+	c.Project.Fields = fieldIDs
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return err
 	}
@@ -351,16 +353,23 @@ func provisionGitHub(owner, repo, visibility, projectName string) (createdProjec
 	return project, nil
 }
 
-func provisionProjectContract(owner, repo string, projectNumber int) error {
+func provisionProjectContract(owner, repo string, projectNumber int, areas []string) (map[string]string, error) {
 	labels := []string{"kind:epic", "kind:contract", "kind:story", "kind:task", "kind:defect", "kind:gate", "kind:decision"}
+	for _, area := range areas {
+		labels = append(labels, "area:"+area)
+	}
 	for _, label := range labels {
 		if output, err := exec.Command("gh", "label", "create", label, "--color", "1D76DB", "--force", "--repo", owner+"/"+repo).CombinedOutput(); err != nil {
-			return fmt.Errorf("create label %s: %s", label, strings.TrimSpace(string(output)))
+			return nil, fmt.Errorf("create label %s: %s", label, strings.TrimSpace(string(output)))
 		}
+	}
+	areaOptions := make([]string, 0, len(areas))
+	for _, area := range areas {
+		areaOptions = append(areaOptions, strings.ToUpper(area[:1])+area[1:])
 	}
 	fields := []struct{ name, kind, options string }{
 		{"Kind", "SINGLE_SELECT", "Epic,Contract,Story,Task,Defect,Gate,Decision"},
-		{"Area", "SINGLE_SELECT", "Stable"},
+		{"Area", "SINGLE_SELECT", strings.Join(areaOptions, ",")},
 		{"Priority", "SINGLE_SELECT", "P0,P1,P2,P3"},
 		{"Proof", "SINGLE_SELECT", "Not started,Local verified,CI verified,Target environment pending,External/provider pending,Complete"},
 		{"Lease holder", "TEXT", ""}, {"Lease expires", "TEXT", ""}, {"Branch", "TEXT", ""}, {"State fingerprint", "TEXT", ""},
@@ -371,10 +380,73 @@ func provisionProjectContract(owner, repo string, projectNumber int) error {
 			args = append(args, "--single-select-options", field.options)
 		}
 		if output, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("create Project field %s: %s", field.name, strings.TrimSpace(string(output)))
+			return nil, fmt.Errorf("create Project field %s: %s", field.name, strings.TrimSpace(string(output)))
 		}
 	}
+	projectFields, err := readProjectFields(owner, projectNumber)
+	if err != nil {
+		return nil, err
+	}
+	status, ok := projectFields["Status"]
+	if !ok {
+		return nil, errors.New("Project default Status field not found")
+	}
+	if err := setStatusOptions(status.ID); err != nil {
+		return nil, err
+	}
+	ids := map[string]string{}
+	for key, name := range map[string]string{"status": "Status", "kind": "Kind", "area": "Area", "priority": "Priority", "proof": "Proof", "lease_holder": "Lease holder", "lease_expires": "Lease expires", "branch": "Branch", "state_fingerprint": "State fingerprint"} {
+		field, ok := projectFields[name]
+		if !ok {
+			return nil, fmt.Errorf("Project field %q missing after provisioning", name)
+		}
+		ids[key] = field.ID
+	}
+	return ids, nil
+}
+
+func setStatusOptions(fieldID string) error {
+	options := []struct{ name, color string }{
+		{"Backlog", "GRAY"}, {"Ready", "BLUE"}, {"Claimed", "YELLOW"}, {"In progress", "ORANGE"}, {"In review", "PURPLE"}, {"Evidence pending", "PINK"}, {"Blocked", "RED"}, {"Done", "GREEN"}, {"Cancelled", "GRAY"}, {"Archived", "GRAY"},
+	}
+	parts := make([]string, 0, len(options))
+	for _, option := range options {
+		parts = append(parts, fmt.Sprintf(`{name:%q,color:%s,description:""}`, option.name, option.color))
+	}
+	mutation := fmt.Sprintf("mutation { updateProjectV2Field(input:{fieldId:%q,singleSelectOptions:[%s]}) { projectV2Field { ... on ProjectV2SingleSelectField { id } } } }", fieldID, strings.Join(parts, ","))
+	if output, err := exec.Command("gh", "api", "graphql", "-f", "query="+mutation).CombinedOutput(); err != nil {
+		return fmt.Errorf("configure Project Status options: %s", strings.TrimSpace(string(output)))
+	}
 	return nil
+}
+
+func readProjectFields(owner string, projectNumber int) (map[string]projectField, error) {
+	output, err := exec.Command("gh", "project", "field-list", fmt.Sprint(projectNumber), "--owner", owner, "--format", "json").Output()
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Fields []struct {
+			ID      string `json:"id"`
+			Name    string `json:"name"`
+			Options []struct {
+				ID   string `json:"id"`
+				Name string `json:"name"`
+			} `json:"options"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		return nil, err
+	}
+	fields := make(map[string]projectField, len(response.Fields))
+	for _, raw := range response.Fields {
+		field := projectField{ID: raw.ID, Options: map[string]string{}}
+		for _, option := range raw.Options {
+			field.Options[option.Name] = option.ID
+		}
+		fields[raw.Name] = field
+	}
+	return fields, nil
 }
 func split(s string) []string {
 	var out []string

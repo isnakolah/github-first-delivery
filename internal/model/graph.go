@@ -93,12 +93,12 @@ func ValidateGraph(issues []Issue) error {
 		if issue.Kind == "Epic" && issue.Branch != "" {
 			problems.add("Epic #%d cannot own implementation branch %q", issue.Number, issue.Branch)
 		}
-		if issue.ProjectKind != "" && issue.ProjectKind != issue.Kind {
+		if issue.ProjectKind != "" && !strings.EqualFold(issue.ProjectKind, issue.Kind) {
 			problems.add("issue #%d Project Kind %q does not match kind:%s", issue.Number, issue.ProjectKind, strings.ToLower(issue.Kind))
 		}
 		if issue.Area != "" && issue.ProjectArea == "" {
 			problems.add("issue #%d has no Project Area", issue.Number)
-		} else if issue.ProjectArea != "" && issue.ProjectArea != issue.Area {
+		} else if issue.ProjectArea != "" && !strings.EqualFold(issue.ProjectArea, issue.Area) {
 			problems.add("issue #%d Project Area %q does not match area:%s", issue.Number, issue.ProjectArea, issue.Area)
 		}
 		for _, blocker := range issue.BlockerIDs {
