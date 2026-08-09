@@ -840,6 +840,7 @@ func validateCommand(args []string) error {
 id number body state parent { id }
 blockedBy(first:100) { nodes { id } }
 labels(first:100) { nodes { name } }
+comments(first:100) { nodes { body author { login } } }
 projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
@@ -871,6 +872,14 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 								Name string `json:"name"`
 							} `json:"nodes"`
 						} `json:"labels"`
+						Comments struct {
+							Nodes []struct {
+								Body   string `json:"body"`
+								Author struct {
+									Login string `json:"login"`
+								} `json:"author"`
+							} `json:"nodes"`
+						} `json:"comments"`
 						ProjectItems struct {
 							Nodes []struct {
 								FieldValues struct {
@@ -929,7 +938,7 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 		for _, blocker := range node.BlockedBy.Nodes {
 			blockers = append(blockers, blocker.ID)
 		}
-		issues = append(issues, model.Issue{ID: node.ID, Number: node.Number, Kind: kind, Status: status, State: node.State, Area: area, ProjectKind: projectKind, ProjectArea: projectArea, Branch: branch, ParentID: parent, BlockerIDs: blockers, Labels: labels, Body: node.Body})
+		issues = append(issues, model.Issue{ID: node.ID, Number: node.Number, Kind: kind, Status: status, State: node.State, Area: area, ProjectKind: projectKind, ProjectArea: projectArea, Branch: branch, ParentID: parent, BlockerIDs: blockers, Labels: labels, EpicApproved: epicApprovalEvidence(c.Owner, node.Comments.Nodes), Body: node.Body})
 	}
 	err = model.ValidateGraph(issues)
 	openIssues := 0
@@ -950,6 +959,20 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 	}
 	fmt.Printf("valid: %d open Issues\n", openIssues)
 	return nil
+}
+
+func epicApprovalEvidence(owner string, comments []struct {
+	Body   string `json:"body"`
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
+}) bool {
+	for _, comment := range comments {
+		if strings.EqualFold(comment.Author.Login, owner) && strings.HasPrefix(strings.TrimSpace(comment.Body), "Owner approval evidence:") {
+			return true
+		}
+	}
+	return false
 }
 
 func requestCommand(args []string) error {

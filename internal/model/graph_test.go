@@ -15,3 +15,10 @@ func TestValidateGraphRejectsStatusAndDuplicateClassificationLabels(t *testing.T
 		t.Fatalf("error=%v", err)
 	}
 }
+
+func TestValidateGraphRequiresApprovalForReadyEpic(t *testing.T) {
+	err := ValidateGraph([]Issue{{ID: "epic", Number: 1, Kind: "Epic", Status: "Ready", State: "OPEN", Area: "stable", ProjectKind: "Epic", ProjectArea: "stable", Labels: []string{"kind:epic", "area:stable"}}})
+	if err == nil || !strings.Contains(err.Error(), "owner approval") {
+		t.Fatalf("error=%v", err)
+	}
+}

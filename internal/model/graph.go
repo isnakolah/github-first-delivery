@@ -7,19 +7,20 @@ import (
 )
 
 type Issue struct {
-	ID          string   `json:"id"`
-	Number      int      `json:"number"`
-	Kind        string   `json:"kind"`
-	Status      string   `json:"status"`
-	State       string   `json:"state"`
-	Area        string   `json:"area"`
-	ProjectKind string   `json:"project_kind"`
-	ProjectArea string   `json:"project_area"`
-	Branch      string   `json:"branch"`
-	ParentID    string   `json:"parent_id"`
-	BlockerIDs  []string `json:"blocker_ids"`
-	Labels      []string `json:"labels"`
-	Body        string   `json:"body"`
+	ID           string   `json:"id"`
+	Number       int      `json:"number"`
+	Kind         string   `json:"kind"`
+	Status       string   `json:"status"`
+	State        string   `json:"state"`
+	Area         string   `json:"area"`
+	ProjectKind  string   `json:"project_kind"`
+	ProjectArea  string   `json:"project_area"`
+	Branch       string   `json:"branch"`
+	ParentID     string   `json:"parent_id"`
+	BlockerIDs   []string `json:"blocker_ids"`
+	Labels       []string `json:"labels"`
+	EpicApproved bool     `json:"epic_approved"`
+	Body         string   `json:"body"`
 }
 
 var projectStatuses = map[string]bool{
@@ -110,6 +111,9 @@ func ValidateGraph(issues []Issue) error {
 		}
 		if issue.Kind == "Epic" && issue.Branch != "" {
 			problems.add("Epic #%d cannot own implementation branch %q", issue.Number, issue.Branch)
+		}
+		if issue.Kind == "Epic" && issue.Status == "Ready" && !issue.EpicApproved {
+			problems.add("Epic #%d cannot enter Ready without owner approval evidence", issue.Number)
 		}
 		if issue.ProjectKind != "" && !strings.EqualFold(issue.ProjectKind, issue.Kind) {
 			problems.add("issue #%d Project Kind %q does not match kind:%s", issue.Number, issue.ProjectKind, strings.ToLower(issue.Kind))
