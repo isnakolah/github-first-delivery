@@ -68,8 +68,11 @@ func run(args []string) error {
 }
 
 func issueCommand(args []string) error {
+	if len(args) > 0 && args[0] == "link-parent" {
+		return linkParentCommand(args[1:])
+	}
 	if len(args) == 0 || args[0] != "create" {
-		return errors.New("usage: gfd issue create --title TITLE --kind KIND --body-file FILE --apply")
+		return errors.New("usage: gfd issue {create|link-parent}")
 	}
 	fs := flag.NewFlagSet("issue create", flag.ContinueOnError)
 	title := fs.String("title", "", "Issue title")
@@ -101,6 +104,53 @@ func issueCommand(args []string) error {
 		return err
 	}
 	cmd := exec.Command("gh", "issue", "create", "--repo", c.Owner+"/"+c.Repository, "--title", *title, "--label", "kind:"+*kind, "--body-file", *bodyFile)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	return cmd.Run()
+}
+
+func linkParentCommand(args []string) error {
+	fs := flag.NewFlagSet("issue link-parent", flag.ContinueOnError)
+	parent := fs.Int("parent", 0, "parent Issue number")
+	child := fs.Int("child", 0, "child Issue number")
+	apply := applyFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if !*apply {
+		return errors.New("parent link requires --apply")
+	}
+	if *parent < 1 || *child < 1 || *parent == *child {
+		return errors.New("distinct --parent and --child are required")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	query := fmt.Sprintf("query { repository(owner:\"%s\",name:\"%s\") { p:issue(number:%d){id} c:issue(number:%d){id} } }", c.Owner, c.Repository, *parent, *child)
+	output, err := exec.Command("gh", "api", "graphql", "-f", "query="+query).Output()
+	if err != nil {
+		return err
+	}
+	var response struct {
+		Data struct {
+			Repository struct {
+				P struct {
+					ID string `json:"id"`
+				} `json:"p"`
+				C struct {
+					ID string `json:"id"`
+				} `json:"c"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		return err
+	}
+	if response.Data.Repository.P.ID == "" || response.Data.Repository.C.ID == "" {
+		return errors.New("parent or child Issue not found")
+	}
+	mutation := fmt.Sprintf("mutation { addSubIssue(input:{issueId:\"%s\",subIssueId:\"%s\"}) { subIssue { number } } }", response.Data.Repository.P.ID, response.Data.Repository.C.ID)
+	cmd := exec.Command("gh", "api", "graphql", "-f", "query="+mutation)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	return cmd.Run()
 }
