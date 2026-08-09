@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"strings"
 )
 
@@ -22,7 +23,21 @@ type Client struct {
 }
 
 func NewClient() *Client {
-	return &Client{BaseURL: APIURL, Token: os.Getenv("GITHUB_TOKEN"), HTTP: http.DefaultClient}
+	return &Client{BaseURL: APIURL, Token: authToken(), HTTP: http.DefaultClient}
+}
+
+// authToken uses an explicitly supplied token first. For normal developer use,
+// it falls back to the active gh CLI credential without persisting or printing
+// the token. GitHub Actions supplies GITHUB_TOKEN from GFD_WRITER_TOKEN.
+func authToken() string {
+	if token := strings.TrimSpace(os.Getenv("GITHUB_TOKEN")); token != "" {
+		return token
+	}
+	output, err := exec.Command("gh", "auth", "token").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(output))
 }
 
 func (c *Client) Do(ctx context.Context, method, path string, input, output any) error {
