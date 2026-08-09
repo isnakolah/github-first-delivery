@@ -1162,22 +1162,18 @@ func updateLiveWork(c model.Config, itemID string, state writer.WorkState) error
 		if !ok {
 			return fmt.Errorf("configured Project lacks field %q", value.name)
 		}
-		args := []string{"project", "item-edit", "--id", itemID, "--project-id", c.Project.ID, "--field-id", field.ID}
-		if value.text {
-			if value.value == "" {
-				args = append(args, "--clear")
-			} else {
-				args = append(args, "--text", value.value)
-			}
-		} else {
+		if !value.text {
 			option, ok := field.Options[value.value]
 			if !ok {
 				return fmt.Errorf("Project field %s has no option %q", value.name, value.value)
 			}
-			args = append(args, "--single-select-option-id", option)
+			if err := setProjectFieldValue(c.Project.ID, itemID, field.ID, option, false); err != nil {
+				return fmt.Errorf("update %s: %w", value.name, err)
+			}
+			continue
 		}
-		if output, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("update %s: %s", value.name, strings.TrimSpace(string(output)))
+		if err := setProjectFieldValue(c.Project.ID, itemID, field.ID, value.value, true); err != nil {
+			return fmt.Errorf("update %s: %w", value.name, err)
 		}
 	}
 	return nil
@@ -1246,9 +1242,8 @@ func initializeProjectFields(c model.Config, number int, state liveWork) error {
 		if !ok || field.Options[value] == "" {
 			return fmt.Errorf("configured Project lacks %s option %q", name, value)
 		}
-		args := []string{"project", "item-edit", "--id", state.ItemID, "--project-id", c.Project.ID, "--field-id", field.ID, "--single-select-option-id", field.Options[value]}
-		if output, err := exec.Command("gh", args...).CombinedOutput(); err != nil {
-			return fmt.Errorf("initialize %s: %s", name, strings.TrimSpace(string(output)))
+		if err := setProjectFieldValue(c.Project.ID, state.ItemID, field.ID, field.Options[value], false); err != nil {
+			return fmt.Errorf("initialize %s: %w", name, err)
 		}
 	}
 	return nil
@@ -1312,4 +1307,23 @@ func ghOutput(args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("gh %s: %s", strings.Join(args, " "), strings.TrimSpace(string(output)))
 	}
 	return output, nil
+}
+
+// setProjectFieldValue uses the Project V2 GraphQL mutations directly. The gh
+// project's item-edit command asks for unrelated read:org and read:discussion
+// scopes before issuing its API call, while the Writer needs only Project
+// mutation authority for this configured Project ID.
+func setProjectFieldValue(projectID, itemID, fieldID, value string, text bool) error {
+	var mutation string
+	if text && value == "" {
+		mutation = fmt.Sprintf(`mutation { clearProjectV2ItemFieldValue(input:{projectId:%q,itemId:%q,fieldId:%q}) { projectV2Item { id } } }`, projectID, itemID, fieldID)
+	} else if text {
+		mutation = fmt.Sprintf(`mutation { updateProjectV2ItemFieldValue(input:{projectId:%q,itemId:%q,fieldId:%q,value:{text:%q}}) { projectV2Item { id } } }`, projectID, itemID, fieldID, value)
+	} else {
+		mutation = fmt.Sprintf(`mutation { updateProjectV2ItemFieldValue(input:{projectId:%q,itemId:%q,fieldId:%q,value:{singleSelectOptionId:%q}}) { projectV2Item { id } } }`, projectID, itemID, fieldID, value)
+	}
+	if _, err := ghOutput("api", "graphql", "-f", "query="+mutation); err != nil {
+		return err
+	}
+	return nil
 }
