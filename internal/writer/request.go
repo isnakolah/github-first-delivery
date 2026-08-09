@@ -19,6 +19,8 @@ type Request struct {
 	Actor               string    `json:"actor"`
 	ExpectedFingerprint string    `json:"expected_fingerprint"`
 	LeaseExpiresAt      string    `json:"lease_expires_at,omitempty"`
+	Branch              string    `json:"branch,omitempty"`
+	Status              string    `json:"status,omitempty"`
 	PR                  string    `json:"pr,omitempty"`
 	Evidence            *Evidence `json:"evidence,omitempty"`
 }

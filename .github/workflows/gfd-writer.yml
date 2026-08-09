@@ -28,4 +28,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GFD_WRITER_TOKEN }}
         run: |
           test -n "$GITHUB_TOKEN" || { echo 'GFD_WRITER_TOKEN not configured; writer remains inactive.'; exit 0; }
-          go run ./cmd/gfd doctor --json
+          if [ "${{ github.event_name }}" = "issue_comment" ]; then
+            go run ./cmd/gfd writer run --issue-number "${{ github.event.issue.number }}" --apply
+          else
+            go run ./cmd/gfd doctor --json
+          fi

@@ -9,8 +9,8 @@ import (
 )
 
 // PendingRequest is a validated request comment eligible for exactly one receipt.
-// Mutating lifecycle state belongs to later Writer stories; this layer owns durable
-// parsing, tamper rejection, edit rejection, and idempotency detection.
+// This layer owns durable parsing, tamper rejection, edit rejection, and idempotency
+// detection before canonical Writer lifecycle mutation.
 type PendingRequest struct {
 	Request   Request
 	CommentID int64
@@ -29,6 +29,9 @@ func Pending(comments []gh.Comment) ([]PendingRequest, []Receipt) {
 	var rejected []Receipt
 	for _, comment := range comments {
 		if !strings.HasPrefix(strings.TrimSpace(comment.Body), RequestPrefix) {
+			continue
+		}
+		if receipted[requestID(comment.Body)] {
 			continue
 		}
 		r, err := ParseRequest(comment.Body)
