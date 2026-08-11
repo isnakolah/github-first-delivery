@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -92,6 +94,10 @@ func issueCommand(args []string) error {
 	title := fs.String("title", "", "Issue title")
 	kind := fs.String("kind", "", "epic|contract|story|task|defect|gate|decision")
 	bodyFile := fs.String("body-file", "", "contract Markdown file")
+	parent := fs.Int("parent", 0, "native parent Issue number; required except Epic")
+	area := fs.String("area", "stable", "configured area")
+	priority := fs.String("priority", "P2", "P0|P1|P2|P3")
+	approvedBy := fs.String("approved-by", "", "owner approval identity; required for Epic")
 	apply := applyFlag(fs)
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
@@ -110,16 +116,83 @@ func issueCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	if *kind != "epic" && model.ValidateWorkContract(string(body)) != nil {
-		return errors.New("work Issue body does not satisfy work:v1 contract")
+	if *kind != "epic" {
+		if err := model.ValidateWorkContract(string(body)); err != nil {
+			return fmt.Errorf("work Issue body does not satisfy work:v1 contract: %w", err)
+		}
+		if *parent < 1 {
+			return errors.New("non-Epic Issue creation requires --parent")
+		}
+	} else if *parent != 0 {
+		return errors.New("Epic cannot have a parent Issue")
+	} else if strings.TrimSpace(*approvedBy) == "" {
+		return errors.New("Epic creation requires --approved-by owner evidence")
 	}
 	c, err := loadConfig()
 	if err != nil {
 		return err
 	}
-	cmd := exec.Command("gh", "issue", "create", "--repo", c.Owner+"/"+c.Repository, "--title", *title, "--label", "kind:"+*kind, "--body-file", *bodyFile)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
+	if !contains(c.Areas, *area) {
+		return fmt.Errorf("area %q is not configured", *area)
+	}
+	if !map[string]bool{"P0": true, "P1": true, "P2": true, "P3": true}[*priority] {
+		return errors.New("priority must be P0, P1, P2, or P3")
+	}
+	createArgs := []string{"issue", "create", "--repo", c.Owner + "/" + c.Repository, "--title", *title, "--label", "kind:" + *kind, "--label", "area:" + *area, "--body-file", *bodyFile}
+	output, err := ghOutput(createArgs...)
+	if err != nil {
+		return err
+	}
+	issueURL := strings.TrimSpace(string(output))
+	number, err := issueNumberFromURL(issueURL)
+	if err != nil {
+		return err
+	}
+	if *kind != "epic" {
+		if err := linkParent(c, *parent, number); err != nil {
+			return fmt.Errorf("created Issue %s but could not link parent: %w", issueURL, err)
+		}
+	}
+	if err := addIssueToProject(c, issueURL, titleCase(*kind), titleCase(*area), *priority); err != nil {
+		return fmt.Errorf("created Issue %s but could not add configured Project fields: %w", issueURL, err)
+	}
+	if *kind == "epic" {
+		if _, err := github.NewClient().CreateComment(context.Background(), c.Owner, c.Repository, number, "Owner approval evidence: "+strings.TrimSpace(*approvedBy)); err != nil {
+			return fmt.Errorf("created Epic %s but could not record approval: %w", issueURL, err)
+		}
+	}
+	fmt.Println(issueURL)
+	return nil
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func titleCase(value string) string {
+	if value == "" {
+		return value
+	}
+	return strings.ToUpper(value[:1]) + value[1:]
+}
+
+var issueURLPattern = regexp.MustCompile(`/issues/([0-9]+)$`)
+
+func issueNumberFromURL(value string) (int, error) {
+	match := issueURLPattern.FindStringSubmatch(strings.TrimSpace(value))
+	if len(match) != 2 {
+		return 0, fmt.Errorf("GitHub Issue create returned unexpected URL %q", value)
+	}
+	number, err := strconv.Atoi(match[1])
+	if err != nil {
+		return 0, err
+	}
+	return number, nil
 }
 
 func addBlockerCommand(args []string) error {
@@ -187,7 +260,11 @@ func linkParentCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	query := fmt.Sprintf("query { repository(owner:\"%s\",name:\"%s\") { p:issue(number:%d){id} c:issue(number:%d){id} } }", c.Owner, c.Repository, *parent, *child)
+	return linkParent(c, *parent, *child)
+}
+
+func linkParent(c model.Config, parent, child int) error {
+	query := fmt.Sprintf("query { repository(owner:\"%s\",name:\"%s\") { p:issue(number:%d){id} c:issue(number:%d){id} } }", c.Owner, c.Repository, parent, child)
 	output, err := exec.Command("gh", "api", "graphql", "-f", "query="+query).Output()
 	if err != nil {
 		return err
@@ -211,9 +288,39 @@ func linkParentCommand(args []string) error {
 		return errors.New("parent or child Issue not found")
 	}
 	mutation := fmt.Sprintf("mutation { addSubIssue(input:{issueId:\"%s\",subIssueId:\"%s\"}) { subIssue { number } } }", response.Data.Repository.P.ID, response.Data.Repository.C.ID)
-	cmd := exec.Command("gh", "api", "graphql", "-f", "query="+mutation)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
+	_, err = ghOutput("api", "graphql", "-f", "query="+mutation)
+	return err
+}
+
+func addIssueToProject(c model.Config, issueURL, kind, area, priority string) error {
+	output, err := ghOutput("project", "item-add", fmt.Sprint(c.Project.Number), "--owner", c.Owner, "--url", issueURL, "--format", "json")
+	if err != nil {
+		return err
+	}
+	var item struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(output, &item); err != nil {
+		return err
+	}
+	if item.ID == "" {
+		return errors.New("GitHub returned incomplete Project item identity")
+	}
+	fields, err := configuredProjectFields(c)
+	if err != nil {
+		return err
+	}
+	values := map[string]string{"Status": "Backlog", "Kind": kind, "Area": area, "Priority": priority, "Proof": "Not started"}
+	for name, value := range values {
+		field, ok := fields[name]
+		if !ok || field.Options[value] == "" {
+			return fmt.Errorf("configured Project lacks %s option %q", name, value)
+		}
+		if err := setProjectFieldValue(c.Project.ID, item.ID, field.ID, field.Options[value], false); err != nil {
+			return fmt.Errorf("set Project %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func adoptCommand(args []string) error {
@@ -878,15 +985,6 @@ func requestCommand(args []string) error {
 		fmt.Printf("%s %s %s %s\n", item.ID, item.Action, item.State, item.Detail)
 	}
 	return nil
-}
-
-func contains(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
 }
 
 type requestStatus struct {
