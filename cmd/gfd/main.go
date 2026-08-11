@@ -70,9 +70,77 @@ func run(args []string) error {
 		return prCommand(args[1:])
 	case "policy":
 		return policyCommand(args[1:])
+	case "guard":
+		return guardCommand(args[1:])
 	default:
 		return usage()
 	}
+}
+
+type hookInput struct {
+	ToolName  string `json:"tool_name"`
+	ToolInput struct {
+		Command string `json:"command"`
+	} `json:"tool_input"`
+}
+
+func guardCommand(args []string) error {
+	if len(args) != 0 {
+		return errors.New("usage: gfd guard")
+	}
+	var input hookInput
+	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
+		return fmt.Errorf("read hook input: %w", err)
+	}
+	if input.ToolName == "Bash" && !stateChangingShell(input.ToolInput.Command) {
+		return nil
+	}
+	if os.Getenv("GFD_BOOTSTRAP_ADMIN") == "1" {
+		return nil
+	}
+	issue, holder, branch := os.Getenv("GFD_LEASE_ISSUE"), os.Getenv("GFD_LEASE_HOLDER"), os.Getenv("GFD_LEASE_BRANCH")
+	if issue == "" || holder == "" || branch == "" {
+		return errors.New("gfd active lease issue, holder, or branch context missing; operation denied")
+	}
+	number, err := strconv.Atoi(issue)
+	if err != nil || number < 1 {
+		return errors.New("GFD_LEASE_ISSUE must be a positive Issue number")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return fmt.Errorf("gfd configuration unavailable; operation denied: %w", err)
+	}
+	state, err := loadLiveWork(c, number)
+	if err != nil {
+		return fmt.Errorf("gfd could not verify active lease; operation denied: %w", err)
+	}
+	if state.Holder != holder || state.Branch != branch {
+		return errors.New("gfd live lease does not match session lease context; operation denied")
+	}
+	expires, err := time.Parse(time.RFC3339, state.Expiry)
+	if err != nil || !expires.After(time.Now().UTC()) {
+		return errors.New("gfd live lease is expired or malformed; operation denied")
+	}
+	switch state.Status {
+	case "Claimed", "In progress", "In review", "Evidence pending":
+		return nil
+	default:
+		return errors.New("gfd lease not in active state; operation denied")
+	}
+}
+
+func stateChangingShell(command string) bool {
+	for _, fragment := range []string{
+		"git commit", "git push", "git merge", "git rebase", "git reset", "git checkout", "git switch",
+		"gh issue create", "gh issue edit", "gh issue close", "gh pr create", "gh pr edit", "gh pr merge",
+		"gh project create", "gh project edit", "gh project field-", "gh repo create", "gh repo edit", "gh secret set",
+		"gh api -X POST", "gh api --method POST", " >", " >>", " tee ", "rm ", "mv ", "cp ", "mkdir ", "touch ",
+	} {
+		if strings.Contains(command, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func policyCommand(args []string) error {
@@ -1884,7 +1952,7 @@ func rejectedReceipt(request writer.Request, err error) writer.Receipt {
 
 func loadLiveWork(c model.Config, number int) (liveWork, error) {
 	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issue(number:%d) {
-id state updatedAt parent { id } blockedBy(first:100) { nodes { id state } }
+id state body updatedAt parent { id } blockedBy(first:100) { nodes { id state } }
 projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
@@ -1939,7 +2007,7 @@ projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes
 	if issue.ID == "" {
 		return liveWork{}, errors.New("Issue not found")
 	}
-	state := liveWork{IssueID: issue.ID, IssueState: issue.State, UpdatedAt: issue.UpdatedAt}
+	state := liveWork{IssueID: issue.ID, IssueState: issue.State, Body: issue.Body, UpdatedAt: issue.UpdatedAt}
 	if issue.Parent != nil {
 		state.ParentID = issue.Parent.ID
 	}

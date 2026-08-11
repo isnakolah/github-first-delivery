@@ -15,9 +15,4 @@ jobs:
       - run: go test -race ./...
       - run: go vet ./...
       - run: go build ./cmd/gfd
-      - run: |
-          test -f plugins/codex/github-first-delivery/.codex-plugin/plugin.json
-          test -f plugins/claude/github-first-delivery/.claude-plugin/plugin.json
-          jq empty plugins/codex/github-first-delivery/hooks/hooks.json
-          jq empty plugins/claude/github-first-delivery/hooks/hooks.json
-          test -f templates/repository/.github/ISSUE_TEMPLATE/work.yml
+      - run: scripts/check-plugins.sh
