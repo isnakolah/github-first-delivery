@@ -2,7 +2,7 @@
 
 `gfd` is source-first Go control plane for GitHub-only delivery state: Issue graph, Project workflow, leases, durable mutation requests, receipts, evidence, and generated noncanonical Wiki journal.
 
-Status: bootstrap implementation. `v0` not released. Do not use for production coordination until disposable-repository integration gate passes.
+Status: release candidate. `v0` remains unreleased until source-install, trusted-hook, and disposable-repository evidence is recorded in Gate #27.
 
 ## Source install
 

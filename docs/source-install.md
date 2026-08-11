@@ -8,7 +8,7 @@
 - Go 1.26.4;
 - GitHub CLI authenticated to target owner/repository;
 - an active `gh auth login` credential for local commands;
-- a dedicated short-lived classic PAT with `public_repo` and `project` only when activating a personal Project V2 Writer in Actions. This PAT covers public repositories account-wide; fine-grained PATs cannot mutate personal Project V2 fields.
+- a dedicated fine-grained `GFD_WRITER_TOKEN` configured as a repository Actions secret. Grant only target-repository Contents, Issues, Pull requests, and Actions access, plus the owning user Project read/write authority required by the installation. Never place its value in config, cache, comments, or logs.
 
 ## Install
 
@@ -21,7 +21,7 @@ gfd doctor --json
 gfd context --json
 ```
 
-`gfd doctor` reports local config and whether `GITHUB_TOKEN` or active `gh` authentication is available. It does not prove Writer authority, hook trust, target-host behavior, or provider state.
+`gfd doctor` reports local config and whether `GITHUB_TOKEN` or active `gh` authentication is available. It does not print or persist token values, and does not prove Writer authority, hook trust, target-host behavior, or provider state.
 
 ## Plugin source install
 
@@ -43,4 +43,4 @@ Pull source, rerun `go install`, then `gfd doctor`. Recreate local cache freely:
 
 ## Proof status
 
-Local unit, vet, template, and plugin-hook checks exist. Fresh macOS and Linux source-install, trusted-plugin, disposable-repository Writer, and hook-behavior proof remain release-Gate requirements.
+Local unit, vet, template, and plugin-hook checks exist. The `Source install proof` workflow runs clean source installs on hosted macOS and Linux runners. Fresh trusted-plugin behavior and disposable-repository Writer proof remain release-Gate requirements.
