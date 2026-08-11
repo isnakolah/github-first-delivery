@@ -66,10 +66,16 @@ fingerprint=$(printf '%s' "$context_json" | jq -r '.state_fingerprint')
 context_json=$("$binary" context --issue-number "$story_number" --json)
 story_id=$(printf '%s' "$context_json" | jq -r '.issue_id')
 fingerprint=$(printf '%s' "$context_json" | jq -r '.state_fingerprint')
-"$binary" work claim --issue-number "$story_number" --issue-id "$story_id" --fingerprint "$fingerprint" --actor "$owner" --branch "$(printf '%03d' "$story_number")/disposable-proof" --apply
-"$binary" writer run --issue-number "$story_number" --apply --json | jq -e '.receipts_applied == 1' >/dev/null
-
 branch="$(printf '%03d' "$story_number")/disposable-proof"
+branch="$(printf '%03d' "$story_number")/disposable-proof"
+# Competing requests observe same canonical state. Writer serializes them: one
+# claim succeeds and stale rival receives rejection receipt, never second lease.
+"$binary" work claim --issue-number "$story_number" --issue-id "$story_id" --fingerprint "$fingerprint" --actor "$owner" --branch "$branch" --apply
+"$binary" work claim --issue-number "$story_number" --issue-id "$story_id" --fingerprint "$fingerprint" --actor "$owner" --branch "$(printf '%03d' "$story_number")/rival-proof" --apply
+"$binary" writer run --issue-number "$story_number" --apply --json | jq -e '.receipts_applied == 2' >/dev/null
+context_json=$("$binary" context --issue-number "$story_number" --json)
+test "$(printf '%s' "$context_json" | jq -r '.status')" = Claimed
+test "$(printf '%s' "$context_json" | jq -r '.branch')" = "$branch"
 git checkout -b "$branch"
 printf '%s\n' 'Disposable Writer proof branch.' >>README.md
 git add README.md
