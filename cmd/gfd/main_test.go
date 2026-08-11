@@ -6,6 +6,10 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/isnakolah/github-first-delivery/internal/github"
+	"github.com/isnakolah/github-first-delivery/internal/writer"
 )
 
 func TestLiveWorkFingerprintIgnoresRequestCommentTimestamp(t *testing.T) {
@@ -35,6 +39,20 @@ func TestJournalRenderIsDeterministic(t *testing.T) {
 	}
 	if !strings.Contains(output, "<!-- gfd-journal:v1 request=r1 -->") || !strings.Contains(output, "- Issue: #13") {
 		t.Fatalf("unexpected journal output: %s", output)
+	}
+}
+
+func TestHasReceipt(t *testing.T) {
+	body, err := writer.RenderReceipt(writer.Receipt{RequestID: "wiki-retry-123", Result: "accepted", Detail: "generated Wiki journal repaired", At: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	comments := []github.Comment{{Body: body}}
+	if !hasReceipt(comments, "wiki-retry-123") {
+		t.Fatal("expected matching receipt")
+	}
+	if hasReceipt(comments, "wiki-retry-456") {
+		t.Fatal("unexpected unmatched receipt")
 	}
 }
 
