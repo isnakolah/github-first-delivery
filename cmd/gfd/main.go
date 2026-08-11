@@ -1502,21 +1502,21 @@ func writerReconcileCommand(args []string) error {
 		return err
 	}
 	var pages [][]struct {
-		Number      int              `json:"number"`
-		PullRequest *json.RawMessage `json:"pull_request"`
+		Number      int             `json:"number"`
+		PullRequest json.RawMessage `json:"pull_request"`
 	}
 	if err := json.Unmarshal(output, &pages); err != nil {
 		return err
 	}
 	issues := make([]struct {
-		Number      int              `json:"number"`
-		PullRequest *json.RawMessage `json:"pull_request"`
+		Number      int             `json:"number"`
+		PullRequest json.RawMessage `json:"pull_request"`
 	}, 0)
 	for _, page := range pages {
 		for _, item := range page {
 			// REST's Issue endpoint also returns pull requests. Writer state is
 			// valid only for canonical Issues, never PR numbers.
-			if item.PullRequest == nil {
+			if len(item.PullRequest) == 0 || string(item.PullRequest) == "null" {
 				issues = append(issues, item)
 			}
 		}
