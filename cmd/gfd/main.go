@@ -1065,7 +1065,9 @@ func pendingWikiJournal(comments []github.Comment) bool {
 	for _, comment := range comments {
 		receipt, err := writer.ParseReceipt(comment.Body)
 		if err == nil && receipt.Result == "accepted" && receipt.Evidence != nil && strings.Contains(receipt.Detail, "Wiki journal pending") {
-			return true
+			if !hasReceipt(comments, "wiki-retry-"+receipt.RequestID) {
+				return true
+			}
 		}
 	}
 	return false

@@ -56,6 +56,25 @@ func TestHasReceipt(t *testing.T) {
 	}
 }
 
+func TestPendingWikiJournalAllowsRepairedReceipt(t *testing.T) {
+	pending, err := writer.RenderReceipt(writer.Receipt{RequestID: "evidence-1", Result: "accepted", Detail: "evidence recorded; Wiki journal pending", Evidence: &writer.Evidence{}, At: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	comments := []github.Comment{{Body: pending}}
+	if !pendingWikiJournal(comments) {
+		t.Fatal("expected pending wiki journal")
+	}
+	repaired, err := writer.RenderReceipt(writer.Receipt{RequestID: "wiki-retry-evidence-1", Result: "accepted", Detail: "generated Wiki journal repaired", At: time.Now().UTC()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	comments = append(comments, github.Comment{Body: repaired})
+	if pendingWikiJournal(comments) {
+		t.Fatal("repaired wiki journal must not block completion")
+	}
+}
+
 func captureStdout(t *testing.T, fn func() error) (string, error) {
 	t.Helper()
 	previous := os.Stdout
