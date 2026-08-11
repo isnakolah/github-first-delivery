@@ -1,3 +1,4 @@
 /gfd
 /.cache/
 *.test
+/.claude/settings.json
