@@ -10,3 +10,13 @@ func TestValidatePR(t *testing.T) {
 		t.Fatal("wanted error")
 	}
 }
+
+func TestReferencedIssuesRequiresExactlyOne(t *testing.T) {
+	issues, err := ReferencedIssues("Refs #7")
+	if err != nil || len(issues) != 1 || issues[0] != 7 {
+		t.Fatalf("issues=%v err=%v", issues, err)
+	}
+	if _, err := ReferencedIssues("Refs #7\nRefs #8"); err == nil {
+		t.Fatal("expected multiple Issue rejection")
+	}
+}

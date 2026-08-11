@@ -1,21 +1,31 @@
 name: GFD policy
+
 on:
-  pull_request:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
 permissions:
   contents: read
-  pull-requests: read
   issues: read
+  pull-requests: read
+
 jobs:
-  metadata:
+  policy:
     runs-on: ubuntu-latest
     steps:
-      - name: Trusted metadata-only policy boundary
+      # pull_request_target runs trusted default-branch code. Never check out
+      # an untrusted head ref: the Writer credential is metadata-only here.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26.4'
+      - name: Validate PR metadata and live work state
         env:
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          PR_BODY: ${{ github.event.pull_request.body }}
+          GITHUB_TOKEN: ${{ secrets.GFD_WRITER_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
         run: |
-          test "${{ github.event.pull_request.head.repo.fork }}" != "true" || echo "Fork PR: no checkout and no writer secret."
-          test -n "${{ github.event.pull_request.number }}"
-          printf '%s\n' "$HEAD_REF" | grep -Eq '^[0-9]{3}/[a-z0-9][a-z0-9-]*$'
-          refs=$(printf '%s\n' "$PR_BODY" | grep -Eo '(Fixes|Closes|Resolves|Refs) #[0-9]+' | wc -l | tr -d ' ')
-          test "$refs" = 1
+          test -n "$GITHUB_TOKEN" || { echo 'GFD_WRITER_TOKEN not configured; policy cannot verify Project lease.'; exit 1; }
+          go run ./cmd/gfd policy pr --pr "$PR_URL" --json
