@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +73,61 @@ func TestPendingWikiJournalAllowsRepairedReceipt(t *testing.T) {
 	comments = append(comments, github.Comment{Body: repaired})
 	if pendingWikiJournal(comments) {
 		t.Fatal("repaired wiki journal must not block completion")
+	}
+}
+
+func TestRequireEmptyBootstrapRoot(t *testing.T) {
+	root := t.TempDir()
+	if err := requireEmptyBootstrapRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "existing"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := requireEmptyBootstrapRoot(root); err == nil {
+		t.Fatal("expected nonempty root refusal")
+	}
+}
+
+func TestConfiguredFieldIDsRejectsMissingRequiredFields(t *testing.T) {
+	if _, err := configuredFieldIDsFromMap(4, map[string]projectField{"Status": {ID: "PVTSSF_status"}}); err == nil {
+		t.Fatal("expected missing field error")
+	}
+}
+
+func TestRequestStatusReportJoinsReceipt(t *testing.T) {
+	request := writer.Request{ID: "r1", Action: "claim", IssueID: "I1", Actor: "agent", ExpectedFingerprint: "fingerprint"}
+	requestBody, err := writer.RenderRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiptBody, err := writer.RenderReceipt(writer.Receipt{RequestID: "r1", Fingerprint: "fresh", Result: "accepted", Detail: "claimed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := requestStatusReport([]github.Comment{{Body: requestBody}, {Body: receiptBody}}, "")
+	if len(report) != 1 || report[0].State != "accepted" || report[0].Detail != "claimed" {
+		t.Fatalf("report=%+v", report)
+	}
+}
+
+func TestStandardProjectViews(t *testing.T) {
+	fields := map[string]int{}
+	for i, name := range []string{"Status", "Kind", "Area", "Priority", "Proof", "Lease holder", "Lease expires", "Branch", "State fingerprint", "Parent issue"} {
+		fields[name] = i + 1
+	}
+	views, err := standardProjectViews(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(views) != 5 || views[0].Name != "Roadmap" || views[2].Layout != "board" || views[2].GroupBy[0] != fields["Status"] {
+		t.Fatalf("views=%+v", views)
+	}
+}
+
+func TestContainsAndTitleCase(t *testing.T) {
+	if !contains([]string{"delivery", "core"}, "core") || contains([]string{"delivery"}, "ops") {
+		t.Fatal("configured area lookup is incorrect")
 	}
 }
 

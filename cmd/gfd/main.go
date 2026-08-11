@@ -220,6 +220,10 @@ func adoptCommand(args []string) error {
 	fs := flag.NewFlagSet("adopt", flag.ContinueOnError)
 	owner := fs.String("owner", "", "GitHub owner")
 	repo := fs.String("repo", "", "repository")
+	projectNumber := fs.Int("project-number", 0, "existing GitHub Project number")
+	wiki := fs.String("wiki", "off", "off|journal")
+	branch := fs.String("default-branch", "main", "default branch")
+	areas := fs.String("areas", "stable", "comma-separated areas")
 	apply := applyFlag(fs)
 	asJSON := jsonFlag(fs)
 	if err := fs.Parse(args); err != nil {
@@ -243,13 +247,24 @@ func adoptCommand(args []string) error {
 	if len(issues) != 0 {
 		return errors.New("adopt refuses repository with existing Issues; audit and migrate explicitly")
 	}
+	if *projectNumber < 1 {
+		return errors.New("adopt --apply requires --project-number for an existing Project")
+	}
 	if _, err := os.Stat(configPath); err == nil {
 		return fmt.Errorf("%s already exists", configPath)
 	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return err
 	}
-	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: "off", DefaultBranch: "main", Areas: []string{"stable"}, WriterVersion: version, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{Fields: map[string]string{}}}
+	projectInfo, err := readProject(*owner, *projectNumber)
+	if err != nil {
+		return err
+	}
+	fieldIDs, err := configuredFieldIDs(*owner, *projectNumber)
+	if err != nil {
+		return err
+	}
+	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: *wiki, DefaultBranch: *branch, Areas: split(*areas), WriterVersion: version, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{ID: projectInfo.ID, Number: *projectNumber, Title: projectInfo.Title, Fields: fieldIDs}}
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -261,6 +276,48 @@ func adoptCommand(args []string) error {
 		return err
 	}
 	return printValue(report, *asJSON)
+}
+
+func readProject(owner string, number int) (createdProject, error) {
+	output, err := ghOutput("project", "view", fmt.Sprint(number), "--owner", owner, "--format", "json")
+	if err != nil {
+		return createdProject{}, fmt.Errorf("read Project #%d: %w", number, err)
+	}
+	var project struct {
+		ID     string `json:"id"`
+		Number int    `json:"number"`
+		Title  string `json:"title"`
+	}
+	if err := json.Unmarshal(output, &project); err != nil {
+		return createdProject{}, err
+	}
+	if project.ID == "" || project.Number != number || project.Title == "" {
+		return createdProject{}, fmt.Errorf("Project #%d returned incomplete identity", number)
+	}
+	return createdProject{ID: project.ID, Number: project.Number, Title: project.Title}, nil
+}
+
+func configuredFieldIDs(owner string, projectNumber int) (map[string]string, error) {
+	fields, err := readProjectFields(owner, projectNumber)
+	if err != nil {
+		return nil, err
+	}
+	return configuredFieldIDsFromMap(projectNumber, fields)
+}
+
+func configuredFieldIDsFromMap(projectNumber int, fields map[string]projectField) (map[string]string, error) {
+	ids := make(map[string]string, 8)
+	for key, name := range map[string]string{
+		"status": "Status", "kind": "Kind", "area": "Area", "priority": "Priority", "proof": "Proof",
+		"lease_holder": "Lease holder", "lease_expires": "Lease expires", "branch": "Branch", "state_fingerprint": "State fingerprint",
+	} {
+		field, ok := fields[name]
+		if !ok || field.ID == "" {
+			return nil, fmt.Errorf("Project #%d missing required field %q", projectNumber, name)
+		}
+		ids[key] = field.ID
+	}
+	return ids, nil
 }
 func usage() error {
 	return errors.New("usage: gfd {init|doctor|context|validate|request|work|evidence|journal|version}")
@@ -293,6 +350,9 @@ func initCommand(args []string) error {
 	if *visibility != "public" && *visibility != "private" {
 		return errors.New("visibility must be public or private")
 	}
+	if err := requireEmptyBootstrapRoot("."); err != nil {
+		return err
+	}
 	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: *wiki, DefaultBranch: *branch, Areas: split(*areas), WriterVersion: version, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{Title: *project, Fields: map[string]string{}}}
 	if err := c.Validate(); err != nil {
 		return err
@@ -308,10 +368,13 @@ func initCommand(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err := provisionProjectViews(*owner, projectInfo.Number); err != nil {
+		return err
+	}
 	c.Project.ID = projectInfo.ID
 	c.Project.Number = projectInfo.Number
 	c.Project.Fields = fieldIDs
-	if err := bootstrap.Install(".", *owner, projectInfo.Number); err != nil {
+	if err := bootstrap.Install(".", *owner, projectInfo.Number, *branch); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
@@ -324,25 +387,64 @@ func initCommand(args []string) error {
 	if err := os.WriteFile(configPath, raw, 0644); err != nil {
 		return err
 	}
+	if err := initializeBootstrapRepository(*owner, *repo, *branch); err != nil {
+		return fmt.Errorf("GitHub repository and Project were provisioned, but local bootstrap push failed: %w", err)
+	}
 	fmt.Printf("provisioned %s/%s and Project #%d; wrote %s\n", *owner, *repo, projectInfo.Number, configPath)
+	return nil
+}
+
+func requireEmptyBootstrapRoot(root string) error {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return errors.New("init requires an empty directory; use gfd adopt --apply after its audit for an existing repository")
+	}
+	return nil
+}
+
+func initializeBootstrapRepository(owner, repo, branch string) error {
+	if output, err := exec.Command("git", "init", "--initial-branch", branch).CombinedOutput(); err != nil {
+		return fmt.Errorf("git init: %s", strings.TrimSpace(string(output)))
+	}
+	if output, err := exec.Command("git", "add", ".").CombinedOutput(); err != nil {
+		return fmt.Errorf("git add: %s", strings.TrimSpace(string(output)))
+	}
+	if output, err := exec.Command("git", "commit", "-m", "chore(gfd): bootstrap GitHub-first delivery").CombinedOutput(); err != nil {
+		return fmt.Errorf("git commit: %s", strings.TrimSpace(string(output)))
+	}
+	remote := "https://github.com/" + owner + "/" + repo + ".git"
+	if output, err := exec.Command("git", "remote", "add", "origin", remote).CombinedOutput(); err != nil {
+		return fmt.Errorf("git remote add: %s", strings.TrimSpace(string(output)))
+	}
+	if output, err := exec.Command("git", "push", "--set-upstream", "origin", branch).CombinedOutput(); err != nil {
+		return fmt.Errorf("git push: %s", strings.TrimSpace(string(output)))
+	}
 	return nil
 }
 
 type createdProject struct {
 	ID     string `json:"id"`
 	Number int    `json:"number"`
+	Title  string `json:"title"`
 }
 
 func provisionGitHub(owner, repo, visibility, projectName string) (createdProject, error) {
 	remote := owner + "/" + repo
-	if err := exec.Command("gh", "repo", "view", remote).Run(); err != nil {
-		flag := "--public"
-		if visibility == "private" {
-			flag = "--private"
-		}
-		if output, createErr := exec.Command("gh", "repo", "create", remote, flag).CombinedOutput(); createErr != nil {
-			return createdProject{}, fmt.Errorf("create repository %s: %s", remote, strings.TrimSpace(string(output)))
-		}
+	if err := exec.Command("gh", "repo", "view", remote).Run(); err == nil {
+		return createdProject{}, fmt.Errorf("repository %s already exists; use gfd adopt after its audit", remote)
+	}
+	flag := "--public"
+	if visibility == "private" {
+		flag = "--private"
+	}
+	if output, err := exec.Command("gh", "repo", "create", remote, flag).CombinedOutput(); err != nil {
+		return createdProject{}, fmt.Errorf("create repository %s: %s", remote, strings.TrimSpace(string(output)))
+	}
+	if output, err := exec.Command("gh", "repo", "edit", remote, "--enable-issues", "--enable-wiki").CombinedOutput(); err != nil {
+		return createdProject{}, fmt.Errorf("enable repository features: %s", strings.TrimSpace(string(output)))
 	}
 	output, err := exec.Command("gh", "project", "create", "--owner", owner, "--title", projectName, "--format", "json").Output()
 	if err != nil {
@@ -355,6 +457,7 @@ func provisionGitHub(owner, repo, visibility, projectName string) (createdProjec
 	if project.ID == "" || project.Number == 0 {
 		return createdProject{}, errors.New("GitHub returned incomplete Project identity")
 	}
+	project.Title = projectName
 	return project, nil
 }
 
@@ -408,6 +511,98 @@ func provisionProjectContract(owner, repo string, projectNumber int, areas []str
 		ids[key] = field.ID
 	}
 	return ids, nil
+}
+
+type restProjectField struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
+type projectView struct {
+	Name          string `json:"name"`
+	Layout        string `json:"layout"`
+	Filter        string `json:"filter"`
+	VisibleFields []int  `json:"visible_fields,omitempty"`
+	GroupBy       []int  `json:"group_by,omitempty"`
+}
+
+func provisionProjectViews(owner string, projectNumber int) error {
+	endpoint, err := projectRESTEndpoint(owner, projectNumber)
+	if err != nil {
+		return err
+	}
+	output, err := ghOutput("api", endpoint+"/fields?per_page=100", "-H", "X-GitHub-Api-Version: 2026-03-10")
+	if err != nil {
+		return fmt.Errorf("list Project fields for views: %w", err)
+	}
+	var fields []restProjectField
+	if err := json.Unmarshal(output, &fields); err != nil {
+		return err
+	}
+	byName := make(map[string]int, len(fields))
+	for _, field := range fields {
+		byName[field.Name] = field.ID
+	}
+	views, err := standardProjectViews(byName)
+	if err != nil {
+		return err
+	}
+	for _, view := range views {
+		raw, err := json.Marshal(view)
+		if err != nil {
+			return err
+		}
+		cmd := exec.Command("gh", "api", "--method", "POST", endpoint+"/views", "-H", "X-GitHub-Api-Version: 2026-03-10", "--input", "-")
+		cmd.Stdin = strings.NewReader(string(raw))
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("create Project view %q: %s", view.Name, strings.TrimSpace(string(output)))
+		}
+	}
+	return nil
+}
+
+func projectRESTEndpoint(owner string, projectNumber int) (string, error) {
+	if _, err := ghOutput("api", "users/"+owner); err == nil {
+		return fmt.Sprintf("users/%s/projectsV2/%d", owner, projectNumber), nil
+	}
+	if _, err := ghOutput("api", "orgs/"+owner); err == nil {
+		return fmt.Sprintf("orgs/%s/projectsV2/%d", owner, projectNumber), nil
+	}
+	return "", fmt.Errorf("Project owner %q is neither a readable GitHub user nor organization", owner)
+}
+
+func standardProjectViews(fields map[string]int) ([]projectView, error) {
+	need := func(name string) (int, error) {
+		id, ok := fields[name]
+		if !ok || id == 0 {
+			return 0, fmt.Errorf("missing required Project field %q for standard views", name)
+		}
+		return id, nil
+	}
+	visibleNames := []string{"Status", "Kind", "Area", "Priority", "Proof", "Lease holder", "Lease expires", "Branch", "State fingerprint"}
+	visible := make([]int, 0, len(visibleNames))
+	for _, name := range visibleNames {
+		id, err := need(name)
+		if err != nil {
+			return nil, err
+		}
+		visible = append(visible, id)
+	}
+	status, err := need("Status")
+	if err != nil {
+		return nil, err
+	}
+	parent, err := need("Parent issue")
+	if err != nil {
+		return nil, err
+	}
+	return []projectView{
+		{Name: "Roadmap", Layout: "roadmap", Filter: "is:issue", GroupBy: []int{parent}},
+		{Name: "Agent queue", Layout: "table", Filter: "is:issue status:Ready", VisibleFields: visible},
+		{Name: "In flight", Layout: "board", Filter: "is:issue status:Claimed,\"In progress\",\"In review\"", VisibleFields: visible, GroupBy: []int{status}},
+		{Name: "Proof and gates", Layout: "table", Filter: "is:issue status:\"Evidence pending\",Blocked", VisibleFields: visible},
+		{Name: "Archive", Layout: "table", Filter: "is:issue status:Done,status:Cancelled,status:Archived", VisibleFields: visible},
+	}, nil
 }
 
 func setStatusOptions(fieldID string) error {
@@ -649,9 +844,88 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 
 func requestCommand(args []string) error {
 	if len(args) == 0 || args[0] != "status" {
-		return errors.New("usage: gfd request status --issue-number N --issue-id ID --action ACTION --actor ACTOR --fingerprint SHA --apply")
+		return errors.New("usage: gfd request status --issue-number N [--request-id ID] [--json] | --issue-id ID --fingerprint SHA --status STATUS --apply")
 	}
-	return submitRequest("status", args[1:], nil)
+	if contains(args[1:], "--apply") {
+		return submitRequest("status", args[1:], nil)
+	}
+	fs := flag.NewFlagSet("request status", flag.ContinueOnError)
+	number := fs.Int("issue-number", 0, "Issue number")
+	requestID := fs.String("request-id", "", "request ID")
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if *number < 1 {
+		return errors.New("request status requires --issue-number")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	comments, err := github.NewClient().ListComments(context.Background(), c.Owner, c.Repository, *number)
+	if err != nil {
+		return err
+	}
+	report := requestStatusReport(comments, *requestID)
+	if len(report) == 0 && *requestID != "" {
+		return fmt.Errorf("request %q not found on Issue #%d", *requestID, *number)
+	}
+	if *asJSON {
+		return printValue(map[string]any{"issue_number": *number, "requests": report}, true)
+	}
+	for _, item := range report {
+		fmt.Printf("%s %s %s %s\n", item.ID, item.Action, item.State, item.Detail)
+	}
+	return nil
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+type requestStatus struct {
+	ID      string `json:"id"`
+	Action  string `json:"action"`
+	Actor   string `json:"actor"`
+	State   string `json:"state"`
+	Detail  string `json:"detail,omitempty"`
+	Receipt string `json:"receipt_fingerprint,omitempty"`
+}
+
+func requestStatusReport(comments []github.Comment, onlyID string) []requestStatus {
+	requests := make(map[string]requestStatus)
+	order := make([]string, 0)
+	for _, comment := range comments {
+		request, err := writer.ParseRequest(comment.Body)
+		if err != nil || (onlyID != "" && request.ID != onlyID) {
+			continue
+		}
+		requests[request.ID] = requestStatus{ID: request.ID, Action: request.Action, Actor: request.Actor, State: "pending"}
+		order = append(order, request.ID)
+	}
+	for _, comment := range comments {
+		receipt, err := writer.ParseReceipt(comment.Body)
+		if err != nil {
+			continue
+		}
+		item, ok := requests[receipt.RequestID]
+		if !ok {
+			continue
+		}
+		item.State, item.Detail, item.Receipt = receipt.Result, receipt.Detail, receipt.Fingerprint
+		requests[receipt.RequestID] = item
+	}
+	report := make([]requestStatus, 0, len(order))
+	for _, id := range order {
+		report = append(report, requests[id])
+	}
+	return report
 }
 func workCommand(args []string) error {
 	if len(args) == 0 {
