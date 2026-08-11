@@ -880,6 +880,15 @@ func requestCommand(args []string) error {
 	return nil
 }
 
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 type requestStatus struct {
 	ID      string `json:"id"`
 	Action  string `json:"action"`
