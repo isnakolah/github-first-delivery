@@ -19,6 +19,7 @@ import (
 	"github.com/isnakolah/github-first-delivery/internal/github"
 	"github.com/isnakolah/github-first-delivery/internal/journal"
 	"github.com/isnakolah/github-first-delivery/internal/model"
+	policycheck "github.com/isnakolah/github-first-delivery/internal/policy"
 	"github.com/isnakolah/github-first-delivery/internal/writer"
 	"gopkg.in/yaml.v3"
 )
