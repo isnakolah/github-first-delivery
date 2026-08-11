@@ -8,9 +8,9 @@ For local commands, `gfd` uses `GITHUB_TOKEN` when supplied; otherwise it reads 
 
 All changing commands require `--apply`; bootstrap requires `--yes`. `gfd context` is first command for agents. Claim leaf work before branch/edit. Submit evidence with final SHA, PR/CI URLs, commands, environments, acceptance result, artifacts, documentation, risks, and proof boundary. A merged PR alone is not Done.
 
-`gfd init` creates Kind, Area, Priority, Proof, lease, branch, and fingerprint fields; replaces Project Status options with canonical lifecycle values; creates configured `area:*` labels; and persists resolved field IDs in `.github/gfd/config.yaml`. It is safe only for fresh bootstrap repositories.
+`gfd init` requires an empty local directory. It creates repository features, Project fields, stable labels, source-controlled operating files, `.github/gfd/config.yaml`, then makes and pushes bootstrap commit. It does not silently adopt an existing repository. `gfd adopt --apply --project-number N` first audits for existing Issues, refuses to reclassify them, and records only an already-complete Project contract.
 
-It also installs source-controlled Epic, Work, Decision, and routed Issue forms plus the compact GitHub-first agent rule. Bootstrap refuses to overwrite any installed operating file.
+It also installs Writer, policy, and Go CI workflows, source-controlled Epic, Work, Decision, and routed Issue forms plus compact GitHub-first agent rule. Writer and policy install canonical `gfd` from source branch `main` until v0 is tagged; release packaging must replace that source ref with a verified tag. Bootstrap refuses to overwrite any installed operating file.
 
 `gfd validate --json` reads live GitHub Issues and Project fields. It reports every detected live-work violation: missing parent/contract/Project Status/Kind/Area, parent or blocker cycle, unresolved blocker in Ready/Claimed/In progress/Done, Epic branch ownership, field-label mismatch, and a Done parent with unfinished child. Closed historical Issues remain relationship context but do not require current Project classification.
 
