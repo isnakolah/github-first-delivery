@@ -1952,7 +1952,7 @@ func rejectedReceipt(request writer.Request, err error) writer.Receipt {
 
 func loadLiveWork(c model.Config, number int) (liveWork, error) {
 	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issue(number:%d) {
-id state updatedAt parent { id } blockedBy(first:100) { nodes { id state } }
+id state body updatedAt parent { id } blockedBy(first:100) { nodes { id state } }
 projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
@@ -2007,7 +2007,7 @@ projectItems(first:20) { nodes { id project { id } fieldValues(first:30) { nodes
 	if issue.ID == "" {
 		return liveWork{}, errors.New("Issue not found")
 	}
-	state := liveWork{IssueID: issue.ID, IssueState: issue.State, UpdatedAt: issue.UpdatedAt}
+	state := liveWork{IssueID: issue.ID, IssueState: issue.State, Body: issue.Body, UpdatedAt: issue.UpdatedAt}
 	if issue.Parent != nil {
 		state.ParentID = issue.Parent.ID
 	}
