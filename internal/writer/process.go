@@ -14,6 +14,7 @@ import (
 type PendingRequest struct {
 	Request   Request
 	CommentID int64
+	Author    string
 }
 
 func Pending(comments []gh.Comment) ([]PendingRequest, []Receipt) {
@@ -48,7 +49,7 @@ func Pending(comments []gh.Comment) ([]PendingRequest, []Receipt) {
 			continue
 		}
 		if !receipted[r.ID] {
-			pending = append(pending, PendingRequest{Request: r, CommentID: comment.ID})
+			pending = append(pending, PendingRequest{Request: r, CommentID: comment.ID, Author: comment.User.Login})
 		}
 	}
 	return pending, rejected

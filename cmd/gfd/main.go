@@ -372,7 +372,7 @@ func adoptCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: *wiki, DefaultBranch: *branch, Areas: split(*areas), WriterVersion: version, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{ID: projectInfo.ID, Number: *projectNumber, Title: projectInfo.Title, Fields: fieldIDs}}
+	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: *wiki, DefaultBranch: *branch, Areas: split(*areas), WriterVersion: version, AuthorizedActors: []string{*owner}, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{ID: projectInfo.ID, Number: *projectNumber, Title: projectInfo.Title, Fields: fieldIDs}}
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -461,7 +461,7 @@ func initCommand(args []string) error {
 	if err := requireEmptyBootstrapRoot("."); err != nil {
 		return err
 	}
-	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: *wiki, DefaultBranch: *branch, Areas: split(*areas), WriterVersion: version, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{Title: *project, Fields: map[string]string{}}}
+	c := model.Config{SchemaVersion: model.ConfigVersion, Owner: *owner, Repository: *repo, WikiMode: *wiki, DefaultBranch: *branch, Areas: split(*areas), WriterVersion: version, AuthorizedActors: []string{*owner}, Policy: model.Policy{LeaseTTLMinutes: 120, ReconcileMins: 5}, Project: model.Project{Title: *project, Fields: map[string]string{}}}
 	if err := c.Validate(); err != nil {
 		return err
 	}
@@ -1374,7 +1374,7 @@ func writerCommand(args []string) error {
 	receiptsApplied := 0
 	if *apply {
 		for _, item := range pending {
-			receipt := applyWriterRequest(c, *number, item.Request, comments)
+			receipt := applyAuthorizedWriterRequest(c, *number, item, comments)
 			receipt = publishEvidenceJournal(c, *number, item.Request, receipt)
 			rejected = append(rejected, receipt)
 		}
@@ -1439,7 +1439,7 @@ func reconcileIssue(c model.Config, number int, apply bool) (int, int, error) {
 	receipted := 0
 	if apply {
 		for _, item := range pending {
-			receipt := applyWriterRequest(c, number, item.Request, comments)
+			receipt := applyAuthorizedWriterRequest(c, number, item, comments)
 			rejected = append(rejected, publishEvidenceJournal(c, number, item.Request, receipt))
 		}
 		for _, receipt := range rejected {
@@ -1518,6 +1518,22 @@ func reconcileIssue(c model.Config, number int, apply bool) (int, int, error) {
 		return receipted, 0, err
 	}
 	return receipted + 1, 1, nil
+}
+
+func applyAuthorizedWriterRequest(c model.Config, number int, pending writer.PendingRequest, comments []github.Comment) writer.Receipt {
+	if !authorizedActor(c.AuthorizedActors, pending.Author) {
+		return rejectedReceipt(pending.Request, fmt.Errorf("request author %q is not authorized by repository config", pending.Author))
+	}
+	return applyWriterRequest(c, number, pending.Request, comments)
+}
+
+func authorizedActor(allowed []string, actor string) bool {
+	for _, candidate := range allowed {
+		if strings.EqualFold(strings.TrimSpace(candidate), strings.TrimSpace(actor)) {
+			return true
+		}
+	}
+	return false
 }
 
 func terminalIssueStatus(status string) bool {
