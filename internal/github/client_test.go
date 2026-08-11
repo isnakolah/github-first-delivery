@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,5 +41,25 @@ func TestNewClientDoesNotPersistToken(t *testing.T) {
 	}
 	if _, err := os.Stat(".gfd-token"); !os.IsNotExist(err) {
 		t.Fatalf("token cache was created: %v", err)
+	}
+}
+
+func TestListCommentsPaginates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "1" {
+			comments := make([]Comment, 100)
+			for i := range comments {
+				comments[i].ID = int64(i + 1)
+			}
+			_ = json.NewEncoder(w).Encode(comments)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]Comment{{ID: 101}})
+	}))
+	defer server.Close()
+	client := &Client{BaseURL: server.URL, HTTP: server.Client()}
+	comments, err := client.ListComments(context.Background(), "octo", "repo", 1)
+	if err != nil || len(comments) != 101 || comments[100].ID != 101 {
+		t.Fatalf("comments=%d err=%v", len(comments), err)
 	}
 }

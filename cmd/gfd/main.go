@@ -796,7 +796,11 @@ func doctor(args []string) error {
 		return err
 	}
 	c, err := loadConfig()
-	report := map[string]any{"gfd_version": version, "config": err == nil, "github_token": github.NewClient().Token != "", "repository": ""}
+	cachePath := ""
+	if cache, cacheErr := github.NewMetadataCache(); cacheErr == nil {
+		cachePath = cache.Root
+	}
+	report := map[string]any{"gfd_version": version, "config": err == nil, "github_token": github.NewClient().Token != "", "repository": "", "cache_path": cachePath, "cache_authority": "disposable metadata only; live GitHub wins"}
 	if err == nil {
 		report["repository"] = c.Owner + "/" + c.Repository
 	}
@@ -822,9 +826,19 @@ func contextCommand(args []string) error {
 		if err != nil {
 			return err
 		}
-		return printValue(map[string]any{"config": c, "issue_number": *number, "issue_id": state.IssueID, "status": state.Status, "lease_holder": state.Holder, "lease_expires": state.Expiry, "branch": state.Branch, "state_fingerprint": fingerprint}, *asJSON)
+		report := map[string]any{"config": c, "issue_number": *number, "issue_id": state.IssueID, "status": state.Status, "lease_holder": state.Holder, "lease_expires": state.Expiry, "branch": state.Branch, "state_fingerprint": fingerprint}
+		storeMetadata("issues/"+strconv.Itoa(*number), report)
+		return printValue(report, *asJSON)
 	}
+	storeMetadata("repository/config", c)
 	return printValue(c, *asJSON)
+}
+
+func storeMetadata(key string, value any) {
+	cache, err := github.NewMetadataCache()
+	if err == nil {
+		_ = cache.StoreJSON(key, value)
+	}
 }
 func validateCommand(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
@@ -841,7 +855,7 @@ id number body state parent { id }
 blockedBy(first:100) { nodes { id } }
 labels(first:100) { nodes { name } }
 comments(first:100) { nodes { body author { login } } }
-projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
+projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
 } } } }
@@ -882,6 +896,9 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 						} `json:"comments"`
 						ProjectItems struct {
 							Nodes []struct {
+								Project struct {
+									ID string `json:"id"`
+								} `json:"project"`
 								FieldValues struct {
 									Nodes []struct {
 										Name  string `json:"name"`
@@ -917,6 +934,9 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 		}
 		status, projectKind, projectArea, branch := "", "", "", ""
 		for _, item := range node.ProjectItems.Nodes {
+			if item.Project.ID != c.Project.ID {
+				continue
+			}
 			for _, value := range item.FieldValues.Nodes {
 				switch value.Field.Name {
 				case "Status":
@@ -1407,15 +1427,21 @@ func writerReconcileCommand(args []string) error {
 	if err != nil {
 		return err
 	}
-	output, err := ghOutput("issue", "list", "--repo", c.Owner+"/"+c.Repository, "--state", "all", "--limit", "100", "--json", "number")
+	output, err := ghOutput("api", "--paginate", "--slurp", "repos/"+c.Owner+"/"+c.Repository+"/issues?state=all&per_page=100")
 	if err != nil {
 		return err
 	}
-	var issues []struct {
+	var pages [][]struct {
 		Number int `json:"number"`
 	}
-	if err := json.Unmarshal(output, &issues); err != nil {
+	if err := json.Unmarshal(output, &pages); err != nil {
 		return err
+	}
+	issues := make([]struct {
+		Number int `json:"number"`
+	}, 0)
+	for _, page := range pages {
+		issues = append(issues, page...)
 	}
 	report := map[string]any{"issues_scanned": len(issues), "requests_receipted": 0, "leases_reclaimed": 0, "apply": *apply}
 	for _, issue := range issues {
