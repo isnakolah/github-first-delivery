@@ -566,7 +566,7 @@ func configuredFieldIDsFromMap(projectNumber int, fields map[string]projectField
 	return ids, nil
 }
 func usage() error {
-	return errors.New("usage: gfd {init|doctor|context|validate|request|work|evidence|journal|version}")
+	return errors.New("usage: gfd {init|adopt|doctor|context|validate|issue|work|pr|evidence|request|writer|journal|policy|configure|guard|version}")
 }
 func applyFlag(fs *flag.FlagSet) *bool {
 	return fs.Bool("apply", false, "perform state-changing action")
