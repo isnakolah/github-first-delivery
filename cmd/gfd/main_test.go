@@ -2,14 +2,16 @@ package main
 
 import (
 	"bytes"
-	"github.com/isnakolah/github-first-delivery/internal/github"
-	"github.com/isnakolah/github-first-delivery/internal/writer"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/isnakolah/github-first-delivery/internal/github"
+	"github.com/isnakolah/github-first-delivery/internal/model"
+	"github.com/isnakolah/github-first-delivery/internal/writer"
 )
 
 func TestLiveWorkFingerprintIgnoresRequestCommentTimestamp(t *testing.T) {
