@@ -1,62 +1,106 @@
 #!/bin/sh
 set -eu
 
-# Creates only an exact generated private target. It never deletes a user-supplied
-# repository. `delete_repo` is required for final cleanup.
+# Creates only an exact generated private target. It never deletes a
+# user-supplied repository. GFD_LIVE_PROOF=1 is required because this script
+# creates a repository, Project, Issues, branch, PR, and Writer receipts.
 if [ "${GFD_LIVE_PROOF:-}" != "1" ]; then
   printf '%s\n' 'set GFD_LIVE_PROOF=1 to create disposable GitHub proof resources' >&2
   exit 2
 fi
 
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 owner=${GFD_LIVE_OWNER:-$(gh api user --jq .login)}
 repo="gfd-proof-$(date -u +%Y%m%d%H%M%S)"
 project_title="GFD proof $repo"
-printf '%s\n' "creating $owner/$repo"
-gh repo create "$owner/$repo" --private --description 'Disposable GFD live-proof resource; safe to delete'
-project=$(gh project create --owner "$owner" --title "$project_title" --format json)
-project_number=$(printf '%s' "$project" | jq -r .number)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/gfd-live-proof.XXXXXX")
+target="$scratch/target"
+binary="$scratch/gfd"
+project_number=""
 
 cleanup() {
-  gh project delete "$project_number" --owner "$owner" || true
-  if ! gh repo delete "$owner/$repo" --yes; then
-    printf '%s\n' "cleanup blocked; private repository retained: $owner/$repo" >&2
-    exit 1
+  status=$?
+  if [ -n "$project_number" ]; then
+    gh project delete "$project_number" --owner "$owner" >/dev/null 2>&1 || true
   fi
+  if gh repo view "$owner/$repo" >/dev/null 2>&1; then
+    gh repo delete "$owner/$repo" --yes >/dev/null 2>&1 || {
+      printf '%s\n' "cleanup blocked; private repository retained: $owner/$repo" >&2
+      exit 1
+    }
+  fi
+  rm -rf "$scratch"
+  exit "$status"
 }
 trap cleanup EXIT INT TERM
 
-epic=$(gh issue create --repo "$owner/$repo" --title 'EPIC — Disposable GFD proof' --body 'Disposable integration proof.')
-child=$(gh issue create --repo "$owner/$repo" --title 'US-PROOF — Verify native parent' --body '<!-- work:v1 -->
-## Outcome
+cd "$root"
+go build -o "$binary" ./cmd/gfd
+mkdir "$target"
+(
+  cd "$target"
+  "$binary" init --owner "$owner" --repo "$repo" --visibility private \
+    --project-name "$project_title" --wiki off --areas stable,core --apply --yes
+)
 
-Verify native parent link.
+project_number=$(gh project list --owner "$owner" --limit 100 --format json --jq ".projects[] | select(.title == \"$project_title\") | .number")
+test -n "$project_number"
 
-## Scope
-Includes:
-- Disposable relationship.
+epic_body="$scratch/epic.md"
+work_body="$scratch/work.md"
+printf '%s\n' 'Disposable Epic. Owner approval recorded by CLI.' >"$epic_body"
+printf '%s\n' '<!-- work:v1 -->' '' '## Outcome' '' 'Exercise Writer lifecycle in disposable repository.' '' '## Scope' 'Includes:' '- One disposable Story.' '' 'Excludes:' '- Production work.' '' '## Acceptance criteria' '- [ ] Lease and completion receipt exist.' '' '## Required evidence' '- Disposable Writer receipts.' '- Verification boundary: provider' '' '## Documentation impact' 'None: disposable integration only.' '' '## Source and relationships' '- US-016 disposable live proof.' '- Native parent and blocker links are authoritative.' >"$work_body"
 
-Excludes:
-- Production work.
+cd "$target"
+epic=$("$binary" issue create --title 'EPIC — Disposable GFD proof' --kind epic --area stable --approved-by "@$owner" --body-file "$epic_body" --apply)
+epic_number=${epic##*/}
+story=$("$binary" issue create --title 'US-PROOF — Exercise Writer lifecycle' --kind story --area core --parent "$epic_number" --body-file "$work_body" --apply)
+story_number=${story##*/}
 
-## Acceptance criteria
-- [ ] Parent exists.
+context_json=$("$binary" context --issue-number "$story_number" --json)
+story_id=$(printf '%s' "$context_json" | jq -r '.issue_id')
+fingerprint=$(printf '%s' "$context_json" | jq -r '.state_fingerprint')
+"$binary" request status --issue-number "$story_number" --issue-id "$story_id" --fingerprint "$fingerprint" --actor "$owner" --status Ready --apply
+"$binary" writer run --issue-number "$story_number" --apply --json | jq -e '.receipts_applied == 1' >/dev/null
 
-## Required evidence
-- API output.
-- Verification boundary: provider
+context_json=$("$binary" context --issue-number "$story_number" --json)
+story_id=$(printf '%s' "$context_json" | jq -r '.issue_id')
+fingerprint=$(printf '%s' "$context_json" | jq -r '.state_fingerprint')
+"$binary" work claim --issue-number "$story_number" --issue-id "$story_id" --fingerprint "$fingerprint" --actor "$owner" --branch "$(printf '%03d' "$story_number")/disposable-proof" --apply
+"$binary" writer run --issue-number "$story_number" --apply --json | jq -e '.receipts_applied == 1' >/dev/null
 
-## Documentation impact
-None: disposable proof.
+branch="$(printf '%03d' "$story_number")/disposable-proof"
+git checkout -b "$branch"
+printf '%s\n' 'Disposable Writer proof branch.' >>README.md
+git add README.md
+git commit -m 'test: exercise disposable Writer proof'
+git push --set-upstream origin "$branch"
 
-## Source and relationships
-- US-016.
-- Native parent and blocker links are authoritative.')
-epic_number=${epic##*/}; child_number=${child##*/}
-ids=$(gh api graphql -f query="query { repository(owner:\"$owner\",name:\"$repo\") { e:issue(number:$epic_number){id} c:issue(number:$child_number){id} } }" --jq '.data.repository | [.e.id,.c.id] | @tsv')
-tab=$(printf '\t')
-epic_id=${ids%%"$tab"*}; child_id=${ids#*"$tab"}
-gh api graphql -f query="mutation { addSubIssue(input:{issueId:\"$epic_id\",subIssueId:\"$child_id\"}) { subIssue { number } } }" >/dev/null
-gh project item-add "$project_number" --owner "$owner" --url "$epic" >/dev/null
-gh project item-add "$project_number" --owner "$owner" --url "$child" >/dev/null
-test "$(gh project item-list "$project_number" --owner "$owner" --limit 10 --format json --jq '.items | length')" = 2
-printf '%s\n' "live proof passed for $owner/$repo; cleanup follows"
+context_json=$("$binary" context --issue-number "$story_number" --json)
+story_id=$(printf '%s' "$context_json" | jq -r '.issue_id')
+fingerprint=$(printf '%s' "$context_json" | jq -r '.state_fingerprint')
+"$binary" work start --issue-number "$story_number" --issue-id "$story_id" --fingerprint "$fingerprint" --actor "$owner" --apply
+"$binary" writer run --issue-number "$story_number" --apply >/dev/null
+
+pr=$(gh pr create --repo "$owner/$repo" --base main --head "$branch" --title 'Disposable Writer proof' --body "Refs #$story_number")
+context_json=$("$binary" context --issue-number "$story_number" --json)
+story_id=$(printf '%s' "$context_json" | jq -r '.issue_id')
+fingerprint=$(printf '%s' "$context_json" | jq -r '.state_fingerprint')
+"$binary" pr link --issue-number "$story_number" --issue-id "$story_id" --fingerprint "$fingerprint" --actor "$owner" --pr "$pr" --apply
+"$binary" writer run --issue-number "$story_number" --apply >/dev/null
+gh pr merge "$pr" --repo "$owner/$repo" --merge --delete-branch
+final_sha=$(gh pr view "$pr" --repo "$owner/$repo" --json mergeCommit --jq .mergeCommit.oid)
+
+context_json=$("$binary" context --issue-number "$story_number" --json)
+story_id=$(printf '%s' "$context_json" | jq -r '.issue_id')
+fingerprint=$(printf '%s' "$context_json" | jq -r '.state_fingerprint')
+"$binary" evidence submit --issue-number "$story_number" --issue-id "$story_id" --fingerprint "$fingerprint" --actor "$owner" --pr "$pr" --final-sha "$final_sha" --ci-url "$pr" --commands 'scripts/live-proof.sh' --environments GitHub --criteria passed --artifacts 'None: disposable proof' --documentation 'None: disposable proof' --risks None --boundary provider --apply
+"$binary" writer run --issue-number "$story_number" --apply >/dev/null
+
+context_json=$("$binary" context --issue-number "$story_number" --json)
+story_id=$(printf '%s' "$context_json" | jq -r '.issue_id')
+fingerprint=$(printf '%s' "$context_json" | jq -r '.state_fingerprint')
+"$binary" request status --issue-number "$story_number" --issue-id "$story_id" --fingerprint "$fingerprint" --actor "$owner" --status Done --apply
+"$binary" writer run --issue-number "$story_number" --apply >/dev/null
+test "$(gh issue view "$story_number" --repo "$owner/$repo" --json state --jq .state)" = CLOSED
+printf '%s\n' "live Writer proof passed for $owner/$repo; cleanup follows"
