@@ -95,3 +95,39 @@ func ParseRequest(comment string) (Request, error) {
 	}
 	return r, nil
 }
+
+// ParseReceipt decodes a Writer receipt without treating free-form comments as
+// evidence. Completion may rely only on a prior accepted evidence receipt.
+func ParseReceipt(comment string) (Receipt, error) {
+	var receipt Receipt
+	if !strings.HasPrefix(strings.TrimSpace(comment), ReceiptPrefix) {
+		return receipt, fmt.Errorf("not a gfd receipt")
+	}
+	start, end := strings.Index(comment, "```json"), strings.LastIndex(comment, "```")
+	if start < 0 || end <= start {
+		return receipt, fmt.Errorf("receipt JSON missing")
+	}
+	payload := strings.TrimSpace(comment[start+len("```json") : end])
+	if err := json.Unmarshal([]byte(payload), &receipt); err != nil {
+		return receipt, err
+	}
+	if receipt.RequestID == "" {
+		return receipt, fmt.Errorf("receipt request id missing")
+	}
+	if !strings.Contains(comment, "request="+receipt.RequestID) {
+		return receipt, fmt.Errorf("receipt request id marker mismatch")
+	}
+	return receipt, nil
+}
+
+// HasAcceptedEvidence accepts only receipts emitted for validated evidence.
+// Edited or free-form Issue comments can never satisfy completion.
+func HasAcceptedEvidence(comments []string) bool {
+	for _, comment := range comments {
+		receipt, err := ParseReceipt(comment)
+		if err == nil && receipt.Result == "accepted" && receipt.Evidence != nil && receipt.Evidence.Validate() == nil {
+			return true
+		}
+	}
+	return false
+}
