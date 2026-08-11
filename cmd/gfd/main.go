@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -839,6 +840,7 @@ func validateCommand(args []string) error {
 id number body state parent { id }
 blockedBy(first:100) { nodes { id } }
 labels(first:100) { nodes { name } }
+comments(first:100) { nodes { body author { login } } }
 projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 ... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
 ... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
@@ -870,6 +872,14 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 								Name string `json:"name"`
 							} `json:"nodes"`
 						} `json:"labels"`
+						Comments struct {
+							Nodes []struct {
+								Body   string `json:"body"`
+								Author struct {
+									Login string `json:"login"`
+								} `json:"author"`
+							} `json:"nodes"`
+						} `json:"comments"`
 						ProjectItems struct {
 							Nodes []struct {
 								FieldValues struct {
@@ -894,7 +904,9 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 	issues := make([]model.Issue, 0, len(response.Data.Repository.Issues.Nodes))
 	for _, node := range response.Data.Repository.Issues.Nodes {
 		kind, area := "", ""
+		labels := make([]string, 0, len(node.Labels.Nodes))
 		for _, label := range node.Labels.Nodes {
+			labels = append(labels, label.Name)
 			if strings.HasPrefix(label.Name, "kind:") {
 				kind = strings.TrimPrefix(label.Name, "kind:")
 				kind = strings.ToUpper(kind[:1]) + kind[1:]
@@ -926,7 +938,7 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 		for _, blocker := range node.BlockedBy.Nodes {
 			blockers = append(blockers, blocker.ID)
 		}
-		issues = append(issues, model.Issue{ID: node.ID, Number: node.Number, Kind: kind, Status: status, State: node.State, Area: area, ProjectKind: projectKind, ProjectArea: projectArea, Branch: branch, ParentID: parent, BlockerIDs: blockers, Body: node.Body})
+		issues = append(issues, model.Issue{ID: node.ID, Number: node.Number, Kind: kind, Status: status, State: node.State, Area: area, ProjectKind: projectKind, ProjectArea: projectArea, Branch: branch, ParentID: parent, BlockerIDs: blockers, Labels: labels, EpicApproved: epicApprovalEvidence(c.Owner, node.Comments.Nodes), Body: node.Body})
 	}
 	err = model.ValidateGraph(issues)
 	openIssues := 0
@@ -947,6 +959,20 @@ projectItems(first:20) { nodes { fieldValues(first:30) { nodes {
 	}
 	fmt.Printf("valid: %d open Issues\n", openIssues)
 	return nil
+}
+
+func epicApprovalEvidence(owner string, comments []struct {
+	Body   string `json:"body"`
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
+}) bool {
+	for _, comment := range comments {
+		if strings.EqualFold(comment.Author.Login, owner) && strings.HasPrefix(strings.TrimSpace(comment.Body), "Owner approval evidence:") {
+			return true
+		}
+	}
+	return false
 }
 
 func requestCommand(args []string) error {
@@ -1027,9 +1053,174 @@ func requestStatusReport(comments []github.Comment, onlyID string) []requestStat
 }
 func workCommand(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: gfd work {claim|start|renew|release|block|resume}")
+		return errors.New("usage: gfd work {list|claim|start|renew|release|block|resume}")
+	}
+	if args[0] == "list" {
+		return workListCommand(args[1:])
 	}
 	return submitRequest(args[0], args[1:], nil)
+}
+
+type readyWork struct {
+	IssueID  string `json:"issue_id"`
+	Number   int    `json:"number"`
+	Title    string `json:"title"`
+	Kind     string `json:"kind"`
+	Area     string `json:"area"`
+	Priority string `json:"priority"`
+}
+
+type workCandidate struct {
+	readyWork
+	Body          string
+	ParentID      string
+	HasChildren   bool
+	Status        string
+	LeaseHolder   string
+	LeaseExpires  string
+	BlockerStates []string
+}
+
+func workListCommand(args []string) error {
+	fs := flag.NewFlagSet("work list", flag.ContinueOnError)
+	asJSON := jsonFlag(fs)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	query := fmt.Sprintf(`query { repository(owner:%q,name:%q) { issues(first:100,states:OPEN) { nodes {
+id number title body parent { id } subIssues(first:1) { nodes { id } } blockedBy(first:100) { nodes { state } }
+projectItems(first:20) { nodes { project { id } fieldValues(first:30) { nodes {
+... on ProjectV2ItemFieldSingleSelectValue { name field { ... on ProjectV2SingleSelectField { name } } }
+... on ProjectV2ItemFieldTextValue { text field { ... on ProjectV2Field { name } } }
+} } } }
+} } } }`, c.Owner, c.Repository)
+	output, err := ghOutput("api", "graphql", "-f", "query="+query)
+	if err != nil {
+		return err
+	}
+	var response struct {
+		Data struct {
+			Repository struct {
+				Issues struct {
+					Nodes []struct {
+						ID     string `json:"id"`
+						Number int    `json:"number"`
+						Title  string `json:"title"`
+						Body   string `json:"body"`
+						Parent *struct {
+							ID string `json:"id"`
+						} `json:"parent"`
+						SubIssues struct {
+							Nodes []struct {
+								ID string `json:"id"`
+							} `json:"nodes"`
+						} `json:"subIssues"`
+						BlockedBy struct {
+							Nodes []struct {
+								State string `json:"state"`
+							} `json:"nodes"`
+						} `json:"blockedBy"`
+						ProjectItems struct {
+							Nodes []struct {
+								Project struct {
+									ID string `json:"id"`
+								} `json:"project"`
+								FieldValues struct {
+									Nodes []struct {
+										Name  string `json:"name"`
+										Text  string `json:"text"`
+										Field struct {
+											Name string `json:"name"`
+										} `json:"field"`
+									} `json:"nodes"`
+								} `json:"fieldValues"`
+							} `json:"nodes"`
+						} `json:"projectItems"`
+					} `json:"nodes"`
+				} `json:"issues"`
+			} `json:"repository"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(output, &response); err != nil {
+		return err
+	}
+	candidates := make([]workCandidate, 0, len(response.Data.Repository.Issues.Nodes))
+	for _, issue := range response.Data.Repository.Issues.Nodes {
+		candidate := workCandidate{readyWork: readyWork{IssueID: issue.ID, Number: issue.Number, Title: issue.Title}, Body: issue.Body, HasChildren: len(issue.SubIssues.Nodes) != 0}
+		if issue.Parent != nil {
+			candidate.ParentID = issue.Parent.ID
+		}
+		for _, blocker := range issue.BlockedBy.Nodes {
+			candidate.BlockerStates = append(candidate.BlockerStates, blocker.State)
+		}
+		for _, item := range issue.ProjectItems.Nodes {
+			if item.Project.ID != c.Project.ID {
+				continue
+			}
+			for _, value := range item.FieldValues.Nodes {
+				switch value.Field.Name {
+				case "Status":
+					candidate.Status = value.Name
+				case "Lease holder":
+					candidate.LeaseHolder = value.Text
+				case "Lease expires":
+					candidate.LeaseExpires = value.Text
+				case "Kind":
+					candidate.Kind = value.Name
+				case "Area":
+					candidate.Area = value.Name
+				case "Priority":
+					candidate.Priority = value.Name
+				}
+			}
+		}
+		candidates = append(candidates, candidate)
+	}
+	ready := selectReadyWork(candidates, time.Now())
+	if *asJSON {
+		return printValue(map[string]any{"repository": c.Owner + "/" + c.Repository, "work": ready}, true)
+	}
+	for _, item := range ready {
+		fmt.Printf("#%d [%s/%s/%s] %s\n", item.Number, item.Kind, item.Area, item.Priority, item.Title)
+	}
+	return nil
+}
+
+func selectReadyWork(candidates []workCandidate, now time.Time) []readyWork {
+	ready := make([]readyWork, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.Status != "Ready" || candidate.ParentID == "" || candidate.HasChildren || strings.EqualFold(candidate.Kind, "Epic") {
+			continue
+		}
+		if err := model.ValidateWorkContract(candidate.Body); err != nil {
+			continue
+		}
+		blocked := false
+		for _, state := range candidate.BlockerStates {
+			if state != "CLOSED" {
+				blocked = true
+				break
+			}
+		}
+		if blocked || hasActiveLease(candidate.LeaseHolder, candidate.LeaseExpires, now) {
+			continue
+		}
+		ready = append(ready, candidate.readyWork)
+	}
+	sort.Slice(ready, func(i, j int) bool { return ready[i].Number < ready[j].Number })
+	return ready
+}
+
+func hasActiveLease(holder, expires string, now time.Time) bool {
+	if holder == "" || expires == "" {
+		return false
+	}
+	expiry, err := time.Parse(time.RFC3339, expires)
+	return err == nil && expiry.After(now.UTC())
 }
 func evidenceCommand(args []string) error {
 	if len(args) == 0 || args[0] != "submit" {
